@@ -3,7 +3,7 @@ import torch
 import pandas as pd
 import numpy as np
 from PIL import Image
-import cv2
+#import cv2
 from diffusers import AutoencoderKL
 import lpips
 from fastapi.responses import HTMLResponse
@@ -18,14 +18,14 @@ from typing import List
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
 UPLOAD_DIR = "uploads"
-THRESHOLD = 0.07
+THRESHOLD = 0.08
 
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+#face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-# ================= 2. AerobladeScanner 클래스 (기존 로직 유지) =================
+# ================= 2. AerobladeScanner 클래스 =================
 class AerobladeScanner:
     def __init__(self, model_dir, device=DEVICE):
         self.device = device
@@ -139,6 +139,7 @@ async def detect_images(files: List[UploadFile] = File(...)):
         with open(original_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        """
         # 2. [수정] 한글 경로를 지원하는 이미지 로드 방식
         try:
             img_array = np.fromfile(original_path, np.uint8)
@@ -175,6 +176,9 @@ async def detect_images(files: List[UploadFile] = File(...)):
         else:
             inspection_path = original_path
             method_info = "AEROBLADE (원본 전체 분석)"
+            """
+        inspection_path = original_path
+        method_info = "원본 이미지 분석"
 
         # 4. 분석 진행
         has_watermark = scanner.check_digital_traces(inspection_path)
