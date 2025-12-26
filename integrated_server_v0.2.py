@@ -16,6 +16,8 @@ import uvicorn
 import shutil
 from typing import List
 
+#pip install torch torchvision pandas numpy Pillow opencv-python diffusers lpips pillow-heif fastapi uvicorn python-multipart transformers accelerate
+
 # ================= 1. 설정 및 경로 =================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
