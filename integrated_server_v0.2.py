@@ -6,6 +6,8 @@ from PIL import Image
 #import cv2
 from diffusers import AutoencoderKL
 import lpips
+from pillow_heif import register_heif_opener
+register_heif_opener()
 from fastapi.responses import HTMLResponse
 from torchvision import transforms
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -18,7 +20,7 @@ from typing import List
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
 UPLOAD_DIR = "uploads"
-THRESHOLD = 0.08
+THRESHOLD = 0.065  # AEROBLADE 판별 임계값
 
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
@@ -102,12 +104,14 @@ class AerobladeScanner:
             
             errors = []
             with torch.no_grad():
-                for _, vae in self.vaes.items():
+                for name, vae in self.vaes.items():
                     recon = vae(img_tensor).sample
                     loss = self.lpips_loss(img_tensor, recon).item()
                     errors.append(loss)
             return min(errors)
-        except:
+        except Exception as e:
+            # [수정] 터미널 창에 구체적으로 어떤 에러가 났는지 출력합니다.
+            print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
             return 999.0
 
 # ================= 3. FastAPI 서버 설정 =================
@@ -142,10 +146,16 @@ async def detect_images(files: List[UploadFile] = File(...)):
         """
         # 2. [수정] 한글 경로를 지원하는 이미지 로드 방식
         try:
-            img_array = np.fromfile(original_path, np.uint8)
-            img_cv = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if file.filename.lower().endswith('.heic'):
+                # HEIC인 경우 Pillow로 열어서 numpy 배열로 변환
+                heic_img = Image.open(original_path).convert("RGB")
+                img_cv = cv2.cvtColor(np.array(heic_img), cv2.COLOR_RGB2BGR)
+            else:
+                # 일반 이미지인 경우 기존 방식 사용
+                img_array = np.fromfile(original_path, np.uint8)
+                img_cv = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         except Exception as e:
-            print(f"파일 로드 실패: {e}")
+            print(f"❌ 파일 로드 실패: {e}")
             continue
 
         if img_cv is None:
@@ -189,6 +199,8 @@ async def detect_images(files: List[UploadFile] = File(...)):
             score = scanner.get_score(inspection_path)
             verdict = "가짜" if score < THRESHOLD else "진짜"
             method = method_info
+        
+        print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method})")
 
         results.append({
             "filename": file.filename,
@@ -200,4 +212,4 @@ async def detect_images(files: List[UploadFile] = File(...)):
     return results # 전체 결과 리스트 반환
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=20408) # 로컬 호스트에서 실행 host="127.0.0.1" | 외부 접속 허용 host="0.0.0.0"
+    uvicorn.run(app, host="0.0.0.0", port=20408) # 로컬 호스트에서 실행 host="127.0.0.1" | 외부 접속 허용 host="0.0.0.0"
