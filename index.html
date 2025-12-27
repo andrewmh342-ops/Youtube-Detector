@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aeroblade 딥페이크 탐지기</title>
+    <style>
+        body { font-family: 'Apple SD Gothic Neo', sans-serif; text-align: center; padding: 50px; background-color: #f0f2f5; }
+        #drop-area { border: 3px dashed #ccc; border-radius: 20px; width: 80%; max-width: 500px; margin: 0 auto; padding: 60px 20px; cursor: pointer; background-color: white; }
+        #drop-area.highlight { border-color: #6c5ce7; background-color: #eef1ff; }
+        #result { font-weight: bold; font-size: 1.5em; margin-top: 30px; }
+        #details { font-size: 0.9em; color: #555; background: #fff; padding: 15px; border-radius: 10px; display: none; margin-top: 10px; }
+        .danger { color: #e74c3c; }
+        .safe { color: #27ae60; }
+        .loading { color: #3498db; }
+        #preview { max-width: 100%; max-height: 200px; margin: 20px auto; display: none; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <h1>🕵️‍♀️ Aeroblade 딥페이크 탐지</h1>
+    <p>이미지의 복원 오차를 분석하여 AI 생성 여부를 판별합니다.</p>
+
+    <div id="drop-area">
+        <p>📷 이미지를 여기에 드래그하거나 클릭하세요</p>
+        <input type="file" id="fileElem" accept="image/*" style="display:none" onchange="handleFiles(this.files)">
+        <img id="preview" src="" alt="미리보기">
+    </div>
+
+    <div id="result-container">
+        <div id="result"></div>
+        <div id="details"></div>
+    </div>
+
+    <script>
+        const dropArea = document.getElementById('drop-area');
+        const fileElem = document.getElementById('fileElem');
+        const previewImg = document.getElementById('preview');
+        const resultDiv = document.getElementById('result');
+        const detailsDiv = document.getElementById('details');
+
+        dropArea.addEventListener('click', () => fileElem.click());
+
+        function handleFiles(files) {
+            const file = files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => { previewImg.src = e.target.result; previewImg.style.display = 'block'; };
+            reader.readAsDataURL(file);
+
+            uploadFile(file);
+        }
+
+        async function uploadFile(file) {
+            // [수정됨] ngrok에서 발급받은 외부 접속 주소를 사용합니다.
+            const url = 'https://hee-unsyncopated-adrianna.ngrok-free.dev/predict'; 
+            const formData = new FormData();
+            formData.append('file', file);
+
+            resultDiv.innerHTML = '<span class="loading">⏳ 정밀 분석 중...</span>';
+            detailsDiv.style.display = 'none';
+
+            try {
+                let response = await fetch(url, { method: 'POST', body: formData });
+                let data = await response.json();
+                
+                if (data.is_fake) {
+                    resultDiv.innerHTML = `<span class="danger">🚨 ${data.result}</span>`;
+                    detailsDiv.innerHTML = `오차 점수: <b>${data.score}</b> (기준 ${data.threshold} 미만)`;
+                } else {
+                    resultDiv.innerHTML = `<span class="safe">✅ ${data.result}</span>`;
+                    detailsDiv.innerHTML = `오차 점수: <b>${data.score}</b> (기준 ${data.threshold} 이상)`;
+                }
+                detailsDiv.style.display = 'inline-block';
+            } catch (error) {
+                resultDiv.innerText = "❌ 서버 연결 실패";
+            }
+        }
+    </script>
+</body>
+</html>
