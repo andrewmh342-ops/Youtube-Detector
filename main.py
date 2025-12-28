@@ -11,7 +11,7 @@ import io
 # ================= 설정 (사용자 코드 기반) =================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 LOCAL_MODEL_DIR = "local_models"  # 모델이 저장된 폴더 경로
-THRESHOLD = 0.1  # 판별 기준값
+THRESHOLD = 0.08  # 판별 기준값
 # =========================================================
 
 app = FastAPI()

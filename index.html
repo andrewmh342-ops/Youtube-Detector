@@ -6,14 +6,18 @@
     <title>Aeroblade 딥페이크 탐지기</title>
     <style>
         body { font-family: 'Apple SD Gothic Neo', sans-serif; text-align: center; padding: 50px; background-color: #f0f2f5; }
-        #drop-area { border: 3px dashed #ccc; border-radius: 20px; width: 80%; max-width: 500px; margin: 0 auto; padding: 60px 20px; cursor: pointer; background-color: white; }
-        #drop-area.highlight { border-color: #6c5ce7; background-color: #eef1ff; }
+        #drop-area { 
+            border: 3px dashed #ccc; border-radius: 20px; width: 80%; max-width: 500px; 
+            margin: 0 auto; padding: 60px 20px; cursor: pointer; background-color: white; 
+            transition: all 0.3s;
+        }
+        #drop-area.highlight { border-color: #6c5ce7; background-color: #eef1ff; transform: scale(1.02); }
         #result { font-weight: bold; font-size: 1.5em; margin-top: 30px; }
-        #details { font-size: 0.9em; color: #555; background: #fff; padding: 15px; border-radius: 10px; display: none; margin-top: 10px; }
+        #details { font-size: 0.9em; color: #555; background: #fff; padding: 15px; border-radius: 10px; display: none; margin-top: 10px; border: 1px solid #ddd; }
         .danger { color: #e74c3c; }
         .safe { color: #27ae60; }
         .loading { color: #3498db; }
-        #preview { max-width: 100%; max-height: 200px; margin: 20px auto; display: none; border-radius: 10px; }
+        #preview { max-width: 100%; max-height: 200px; margin: 20px auto; display: none; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
@@ -21,7 +25,7 @@
     <p>이미지의 복원 오차를 분석하여 AI 생성 여부를 판별합니다.</p>
 
     <div id="drop-area">
-        <p>📷 이미지를 여기에 드래그하거나 클릭하세요</p>
+        <p id="instruction">📷 이미지를 여기에 드래그하거나 클릭하세요</p>
         <input type="file" id="fileElem" accept="image/*" style="display:none" onchange="handleFiles(this.files)">
         <img id="preview" src="" alt="미리보기">
     </div>
@@ -37,27 +41,59 @@
         const previewImg = document.getElementById('preview');
         const resultDiv = document.getElementById('result');
         const detailsDiv = document.getElementById('details');
+        const instruction = document.getElementById('instruction');
 
+        // 클릭으로 파일 열기
         dropArea.addEventListener('click', () => fileElem.click());
+
+        // 드래그 앤 드롭 기본 동작 방지 (브라우저가 파일을 직접 여는 것 방지)
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        // 드래그 강조 효과
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropArea.addEventListener(eventName, () => dropArea.classList.add('highlight'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, () => dropArea.classList.remove('highlight'), false);
+        });
+
+        // 파일을 놓았을 때 처리
+        dropArea.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }, false);
 
         function handleFiles(files) {
             const file = files[0];
             if (!file) return;
 
+            // 미리보기 표시
             const reader = new FileReader();
-            reader.onload = (e) => { previewImg.src = e.target.result; previewImg.style.display = 'block'; };
+            reader.onload = (e) => { 
+                previewImg.src = e.target.result; 
+                previewImg.style.display = 'block';
+                instruction.style.display = 'none';
+            };
             reader.readAsDataURL(file);
 
             uploadFile(file);
         }
 
         async function uploadFile(file) {
-            // [수정됨] ngrok에서 발급받은 외부 접속 주소를 사용합니다.
             const url = 'https://hee-unsyncopated-adrianna.ngrok-free.dev/predict'; 
             const formData = new FormData();
             formData.append('file', file);
 
-            resultDiv.innerHTML = '<span class="loading">⏳ 정밀 분석 중...</span>';
+            resultDiv.innerHTML = '<span class="loading">⏳ 인공지능이 분석 중입니다...</span>';
             detailsDiv.style.display = 'none';
 
             try {
@@ -66,14 +102,15 @@
                 
                 if (data.is_fake) {
                     resultDiv.innerHTML = `<span class="danger">🚨 ${data.result}</span>`;
-                    detailsDiv.innerHTML = `오차 점수: <b>${data.score}</b> (기준 ${data.threshold} 미만)`;
+                    detailsDiv.innerHTML = `오차 점수: <b>${data.score}</b><br>(기준 ${data.threshold} 미만으로 가짜 의심)`;
                 } else {
                     resultDiv.innerHTML = `<span class="safe">✅ ${data.result}</span>`;
-                    detailsDiv.innerHTML = `오차 점수: <b>${data.score}</b> (기준 ${data.threshold} 이상)`;
+                    detailsDiv.innerHTML = `오차 점수: <b>${data.score}</b><br>(기준 ${data.threshold} 이상으로 진짜 사진 판정)`;
                 }
                 detailsDiv.style.display = 'inline-block';
             } catch (error) {
-                resultDiv.innerText = "❌ 서버 연결 실패";
+                resultDiv.innerHTML = "<span class='danger'>❌ 서버 연결 실패 (ngrok 주소를 확인하세요)</span>";
+                console.error(error);
             }
         }
     </script>
