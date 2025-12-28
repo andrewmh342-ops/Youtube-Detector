@@ -1,18 +1,18 @@
+import os
+import io
+import torch
+import lpips
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-import os
-import torch
 from PIL import Image
 from diffusers import AutoencoderKL
-import lpips
 from torchvision import transforms
-import io
 
-# ================= 설정 (사용자 코드 기반) =================
+# ================= 설정 (팀원들과 공유할 핵심 변수) =================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-LOCAL_MODEL_DIR = "local_models"  # 모델이 저장된 폴더 경로
-THRESHOLD = 0.08  # 판별 기준값
-# =========================================================
+SAVE_DIR = "local_models" # 모델 저장 폴더
+THRESHOLD = 0.08          # 기본 판별 기준 (유튜브 캡처 위주라면 0.025로 낮추세요)
+# =================================================================
 
 app = FastAPI()
 
@@ -28,33 +28,34 @@ app.add_middleware(
 class AerobladeScanner:
     def __init__(self, model_dir, device=DEVICE):
         self.device = device
+        self.model_dir = model_dir
         self.vaes = {}
         
-        print(f"[{device}] 로컬 에어로블레이드 모델 로딩 중...")
+        # 1. 모델이 없으면 다운로드부터 진행 (기존 다운로드 코드 통합)
+        self._check_and_download()
+        
+        # 2. 로컬 모델 로딩
+        print(f"\n[{device}] 로컬 에어로블레이드 모델 로딩 중...")
         try:
-            # 1. SD 1.5 VAE 로드 (로컬 파일만 사용)
+            # SD 1.5 VAE 로드
             self.vaes['sd1.5'] = AutoencoderKL.from_pretrained(
-                os.path.join(model_dir, "vae_sd1.5"), 
-                local_files_only=True
+                os.path.join(model_dir, "vae_sd1.5"), local_files_only=True
             ).to(self.device).eval()
             
-            # 2. SD 2.1 VAE 로드 (로컬 파일만 사용)
+            # SD 2.1 VAE 로드
             self.vaes['sd2.1'] = AutoencoderKL.from_pretrained(
-                os.path.join(model_dir, "vae_sd2.1"), 
-                local_files_only=True
+                os.path.join(model_dir, "vae_sd2.1"), local_files_only=True
             ).to(self.device).eval()
             
-            # 3. LPIPS 로드
+            # LPIPS 로드
             self.lpips_loss = lpips.LPIPS(net='vgg', pretrained=False).to(self.device)
             state_dict = torch.load(os.path.join(model_dir, "lpips_vgg.pth"), map_location=self.device)
             self.lpips_loss.load_state_dict(state_dict)
             self.lpips_loss.eval()
             
-            print("✅ 로컬 모델 로드 완료!")
-            
+            print("✅ 모든 모델 로드 완료! 이제 서비스를 시작합니다.")
         except Exception as e:
             print(f"❌ [오류] 모델 로드 실패: {e}")
-            print(f"'{model_dir}' 폴더 안에 모델 파일이 있는지 확인해주세요.")
 
         self.transform = transforms.Compose([
             transforms.Resize((512, 512)),
@@ -62,8 +63,43 @@ class AerobladeScanner:
             transforms.Normalize([0.5], [0.5]) 
         ])
 
+    def _check_and_download(self):
+        """모델 폴더를 확인하고 부족한 파일을 자동으로 다운로드합니다."""
+        if not os.path.exists(self.model_dir):
+            os.makedirs(self.model_dir)
+
+        print(f"=== 모델 파일 확인 중 (저장 위치: {self.model_dir}) ===")
+        
+        try:
+            # 1. SD 1.5 VAE
+            sd15_path = os.path.join(self.model_dir, "vae_sd1.5")
+            if not os.path.exists(sd15_path):
+                print("[1/3] SD 1.5 VAE 다운로드 중...")
+                vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
+                vae.save_pretrained(sd15_path)
+                print("   -> 완료")
+
+            # 2. SD 2.1 VAE
+            sd21_path = os.path.join(self.model_dir, "vae_sd2.1")
+            if not os.path.exists(sd21_path):
+                print("[2/3] SD 2.1 VAE 다운로드 중...")
+                vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema")
+                vae.save_pretrained(sd21_path)
+                print("   -> 완료")
+
+            # 3. LPIPS 가중치
+            lpips_path = os.path.join(self.model_dir, "lpips_vgg.pth")
+            if not os.path.exists(lpips_path):
+                print("[3/3] LPIPS 가중치 다운로드 중...")
+                lpips_model = lpips.LPIPS(net='vgg', pretrained=True)
+                torch.save(lpips_model.state_dict(), lpips_path)
+                print("   -> 완료")
+                
+        except Exception as e:
+            print(f"\n❌ 다운로드 중 오류 발생: {e}\n인터넷 연결을 확인해주세요.")
+
     def get_score(self, img_bytes):
-        """이미지 바이트를 받아 복원 오차 계산"""
+        """이미지 복원 오차 계산 핵심 로직"""
         try:
             image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
             img_tensor = self.transform(image).unsqueeze(0).to(self.device)
@@ -78,21 +114,17 @@ class AerobladeScanner:
         except:
             return None
 
-# 서버 시작 시 스캐너 객체 생성
-scanner = AerobladeScanner(LOCAL_MODEL_DIR)
+# 서버 시작 시 스캐너 객체 생성 (다운로드 로직 포함)
+scanner = AerobladeScanner(SAVE_DIR)
 
 @app.post("/predict")
 async def predict_image(file: UploadFile = File(...)):
-    # 1. 이미지 읽기
     image_data = await file.read()
-    
-    # 2. 에어로블레이드 점수 계산
     score = scanner.get_score(image_data)
     
     if score is None:
-        return {"error": "이미지 처리 중 오류가 발생했습니다."}
+        return {"error": "이미지 처리 오류"}
 
-    # 3. 판별 (점수가 THRESHOLD보다 낮으면 Fake)
     is_fake = score < THRESHOLD
     result_text = "Fake (가짜)" if is_fake else "Real (진짜)"
 
