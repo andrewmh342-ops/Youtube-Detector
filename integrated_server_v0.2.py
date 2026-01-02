@@ -3,7 +3,6 @@ import torch
 import pandas as pd
 import numpy as np
 from PIL import Image
-#import cv2
 from diffusers import AutoencoderKL
 import lpips
 from pillow_heif import register_heif_opener
@@ -15,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import shutil
 from typing import List
+import cv2
 
 #pip install torch torchvision pandas numpy Pillow opencv-python diffusers lpips pillow-heif fastapi uvicorn python-multipart transformers accelerate
 
@@ -23,12 +23,10 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
 UPLOAD_DIR = "uploads"
 THRESHOLD = 0.065  # AEROBLADE 판별 임계값
+THRESHOLD_FFT = 2.0  # 푸리에 변환 판별 임계값
 
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
-
-#face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
 # ================= 2. AerobladeScanner 클래스 =================
 class AerobladeScanner:
     def __init__(self, model_dir, device=DEVICE):
@@ -98,7 +96,7 @@ class AerobladeScanner:
         except: pass
         return False
 
-    def get_score(self, img_path):
+    def get_aero_score(self, img_path):
         """2차 검사: AEROBLADE 재구성 오차 계산"""
         try:
             image = Image.open(img_path).convert("RGB")
@@ -115,6 +113,52 @@ class AerobladeScanner:
             # [수정] 터미널 창에 구체적으로 어떤 에러가 났는지 출력합니다.
             print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
             return 999.0
+        
+    def get_fft_score(self, img_path):
+        try:
+            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                return 0.0
+            
+            img = cv2.resize(img, (512, 512))
+
+            f = np.fft.fft2(img)
+            fshift = np.fft.fftshift(f)
+            
+            magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1e-9)
+
+            rows, cols = img.shape
+            crow, ccol = rows // 2 , cols // 2
+            mask_size = 30
+        
+            magnitude_spectrum[crow-mask_size:crow+mask_size, ccol-mask_size:ccol+mask_size] = 0
+
+            score = np.mean(magnitude_spectrum)
+            
+            return float(score)
+        except Exception as e:
+            print(f"❌ 푸리에 분석 중 에러 발생: {e}")
+            return 0.0
+
+    def get_score(self, img_path):
+        # 1. Aeroblade 점수 정규화 (가짜일 확률로 변환)
+        # 임계값보다 낮을수록 1.0(가짜)에 가까워짐
+        aero_score = self.get_aero_score(img_path)
+        aero_prob = max(0, (THRESHOLD - aero_score) / THRESHOLD) if aero_score < THRESHOLD else 0
+
+        # 2. 푸리에 점수 정규화 (가짜일 확률로 변환)
+        # 임계값보다 높을수록 1.0(가짜)에 가까워짐
+        fft_score = self.get_fft_score(img_path)
+        fft_prob = min(1.0, fft_score / (THRESHOLD_FFT * 1.5)) # 1.5배 지점을 만점으로 가정
+
+        # 3. 가중치 합산 (7:3 비율)
+        final_fake_score = (aero_prob * 0.7) + (fft_prob * 0.3)
+
+        # 4. 최종 판별
+        if final_fake_score > 0.5:
+            return 1, final_fake_score
+        else:
+            return 0, final_fake_score
 
 # ================= 3. FastAPI 서버 설정 =================
 app = FastAPI()
@@ -145,50 +189,6 @@ async def detect_images(files: List[UploadFile] = File(...)):
         with open(original_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        """
-        # 2. [수정] 한글 경로를 지원하는 이미지 로드 방식
-        try:
-            if file.filename.lower().endswith('.heic'):
-                # HEIC인 경우 Pillow로 열어서 numpy 배열로 변환
-                heic_img = Image.open(original_path).convert("RGB")
-                img_cv = cv2.cvtColor(np.array(heic_img), cv2.COLOR_RGB2BGR)
-            else:
-                # 일반 이미지인 경우 기존 방식 사용
-                img_array = np.fromfile(original_path, np.uint8)
-                img_cv = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        except Exception as e:
-            print(f"❌ 파일 로드 실패: {e}")
-            continue
-
-        if img_cv is None:
-            print(f"이미지 디코딩 실패: {original_path}")
-            continue
-            
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
-        # 3. 얼굴 검출 및 크롭
-        if len(faces) > 0:
-            (x, y, w, h) = faces[0]
-            pad_w, pad_h = int(w * 0.2), int(h * 0.2)
-            y1, y2 = max(0, y - pad_h), min(img_cv.shape[0], y + h + pad_h)
-            x1, x2 = max(0, x - pad_w), min(img_cv.shape[1], x + w + pad_w)
-            
-            face_crop = img_cv[y1:y2, x1:x2]
-            crop_filename = f"inspect_face_{file.filename}"
-            inspection_path = os.path.join(UPLOAD_DIR, crop_filename)
-            
-            extension = os.path.splitext(crop_filename)[1] # .jpg, .png 등 추출
-            result, encoded_img = cv2.imencode(extension, face_crop)
-            if result:
-                with open(inspection_path, mode='w+b') as f:
-                    encoded_img.tofile(f)
-            
-            method_info = "AEROBLADE (얼굴 크롭 분석)"
-        else:
-            inspection_path = original_path
-            method_info = "AEROBLADE (원본 전체 분석)"
-            """
         inspection_path = original_path
         method_info = "원본 이미지 분석"
 
@@ -198,8 +198,8 @@ async def detect_images(files: List[UploadFile] = File(...)):
         if has_watermark:
             verdict, score, method = "가짜", 0.0, "메타데이터 흔적 감지"
         else:
-            score = scanner.get_score(inspection_path)
-            verdict = "가짜" if score < THRESHOLD else "진짜"
+            verdict,score = scanner.get_score(inspection_path)
+            verdict = "가짜" if verdict == 1 else "진짜"
             method = method_info
         
         print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method})")
