@@ -3,7 +3,7 @@ import torch
 import pandas as pd
 import numpy as np
 from PIL import Image
-#import cv2
+import cv2
 from diffusers import AutoencoderKL
 import lpips
 from pillow_heif import register_heif_opener
@@ -115,6 +115,59 @@ class AerobladeScanner:
             # [수정] 터미널 창에 구체적으로 어떤 에러가 났는지 출력합니다.
             print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
             return 999.0
+        
+    def process_video(self, video_path, target_samples=30):
+            """
+            영상을 불러와 길이에 따라 프레임을 샘플링하고 딥페이크 여부 판별
+            """
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            if total_frames == 0:
+                return 999.0, "파일 오류"
+
+            # 영상 길이에 관계없이 target_samples(예: 30장)만큼 추출하도록 간격 계산
+            dynamic_sample_rate = max(1, total_frames // target_samples)
+            
+            scores = []
+            current_frame = 0
+            extracted_count = 0
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret: break
+                
+                if current_frame % dynamic_sample_rate == 0:
+                    # 프레임을 임시 이미지 파일로 저장하거나 바로 PIL로 변환하여 분석
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(frame_rgb)
+                    
+                    # 기존 get_score 로직 활용 (함수 내부를 리팩토링하여 텐서를 직접 받게 하면 더 빠름)
+                    # 여기서는 편의상 임시 저장 후 get_score를 호출하거나 내부 로직을 직접 수행
+                    img_tensor = self.transform(pil_img).unsqueeze(0).to(self.device)
+                    
+                    with torch.no_grad():
+                        errors = []
+                        for name, vae in self.vaes.items():
+                            recon = vae(img_tensor).sample
+                            loss = self.lpips_loss(img_tensor, recon).item()
+                            errors.append(loss)
+                        scores.append(min(errors))
+                    
+                    extracted_count += 1
+                    if extracted_count >= target_samples:
+                        break
+                
+                current_frame += 1
+            
+            cap.release()
+            
+            if not scores: return 999.0, "분석 불가"
+            
+            # 평균 점수 계산 (AEROBLADE는 점수가 낮을수록 가짜일 확률이 높음)
+            avg_score = sum(scores) / len(scores)
+            verdict = "가짜" if avg_score < THRESHOLD else "진짜"
+            return avg_score, verdict
 
 # ================= 3. FastAPI 서버 설정 =================
 app = FastAPI()
@@ -134,73 +187,31 @@ async def read_index():
         return f.read()
     
 @app.post("/upload")
-async def detect_images(files: List[UploadFile] = File(...)):
+async def detect_files(files: List[UploadFile] = File(...)):
     results = []
+    video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
 
     for file in files:
-        # 1. 원본 이미지 저장
-        original_filename = f"orig_{file.filename}"
-        original_path = os.path.join(UPLOAD_DIR, original_filename)
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
         
-        with open(original_path, "wb") as buffer:
+        with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        """
-        # 2. [수정] 한글 경로를 지원하는 이미지 로드 방식
-        try:
-            if file.filename.lower().endswith('.heic'):
-                # HEIC인 경우 Pillow로 열어서 numpy 배열로 변환
-                heic_img = Image.open(original_path).convert("RGB")
-                img_cv = cv2.cvtColor(np.array(heic_img), cv2.COLOR_RGB2BGR)
+        # 영상 파일인지 확인
+        if file_ext in video_extensions:
+            # 영상 분석 (목표 샘플 수 30개)
+            score, verdict = scanner.process_video(file_path, target_samples=30)
+            method = "AEROBLADE (영상 프레임 분석)"
+        else:
+            # 이미지 분석
+            has_watermark = scanner.check_digital_traces(file_path)
+            if has_watermark:
+                verdict, score, method = "가짜", 0.0, "메타데이터 흔적 감지"
             else:
-                # 일반 이미지인 경우 기존 방식 사용
-                img_array = np.fromfile(original_path, np.uint8)
-                img_cv = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        except Exception as e:
-            print(f"❌ 파일 로드 실패: {e}")
-            continue
-
-        if img_cv is None:
-            print(f"이미지 디코딩 실패: {original_path}")
-            continue
-            
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
-        # 3. 얼굴 검출 및 크롭
-        if len(faces) > 0:
-            (x, y, w, h) = faces[0]
-            pad_w, pad_h = int(w * 0.2), int(h * 0.2)
-            y1, y2 = max(0, y - pad_h), min(img_cv.shape[0], y + h + pad_h)
-            x1, x2 = max(0, x - pad_w), min(img_cv.shape[1], x + w + pad_w)
-            
-            face_crop = img_cv[y1:y2, x1:x2]
-            crop_filename = f"inspect_face_{file.filename}"
-            inspection_path = os.path.join(UPLOAD_DIR, crop_filename)
-            
-            extension = os.path.splitext(crop_filename)[1] # .jpg, .png 등 추출
-            result, encoded_img = cv2.imencode(extension, face_crop)
-            if result:
-                with open(inspection_path, mode='w+b') as f:
-                    encoded_img.tofile(f)
-            
-            method_info = "AEROBLADE (얼굴 크롭 분석)"
-        else:
-            inspection_path = original_path
-            method_info = "AEROBLADE (원본 전체 분석)"
-            """
-        inspection_path = original_path
-        method_info = "원본 이미지 분석"
-
-        # 4. 분석 진행
-        has_watermark = scanner.check_digital_traces(inspection_path)
-        
-        if has_watermark:
-            verdict, score, method = "가짜", 0.0, "메타데이터 흔적 감지"
-        else:
-            score = scanner.get_score(inspection_path)
-            verdict = "가짜" if score < THRESHOLD else "진짜"
-            method = method_info
+                score = scanner.get_score(file_path)
+                verdict = "가짜" if score < THRESHOLD else "진짜"
+                method = "AEROBLADE (이미지 분석)"
         
         print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method})")
 
