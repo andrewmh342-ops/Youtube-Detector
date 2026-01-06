@@ -21,16 +21,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         uploadToServer(request.dataUrl, request.filename)
             .then(data => {
                 const result = data[0];
-                // 영상 프레임 분석일 경우 알림 띄우기
-                if (request.isVideo) {
-                    chrome.notifications.create({
-                        type: 'basic',
-                        iconUrl: 'icon.png',
-                        title: '딥페이크 영상 분석 결과',
-                        message: `판별: ${result.result} (점수: ${result.score})`,
-                        priority: 2
-                    });
-                }
+                // 시스템 알림(chrome.notifications) 로직 삭제
+                // 대신 결과를 content.js로 그대로 반환
                 sendResponse({ success: true, data: result });
             })
             .catch(err => sendResponse({ success: false, error: err.message }));

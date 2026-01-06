@@ -35,6 +35,11 @@ async function runDetectionFlow() {
             dataUrl: dataUrl,
             filename: "video_frame.jpg",
             isVideo: true
+        }, (res) => {
+            if (res && res.success) {
+                // 시스템 알림 대신 오버레이 창 호출
+                showVideoResultOverlay(res.data.result, res.data.score);
+            }
         });
     } 
     // 2. 영상이 없을 경우 이미지 전수 조사
@@ -58,6 +63,29 @@ async function runDetectionFlow() {
     }
 }
 
+// 영상 분석 결과를 화면에 띄우는 함수
+function showVideoResultOverlay(result, score) {
+    // 기존 창이 있으면 제거
+    const existing = document.querySelector('.df-result-alert');
+    if (existing) existing.remove();
+
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `df-result-alert ${result === "가짜" ? "fake" : ""}`;
+    
+    alertDiv.innerHTML = `
+        <h3>딥페이크 분석 결과</h3>
+        <p>판별 : <strong>${result}</strong></p>
+        <p>신뢰도 점수 : ${score}</p>
+        <button id="df-close-btn">닫기</button>
+    `;
+
+    document.body.appendChild(alertDiv);
+
+    document.getElementById('df-close-btn').addEventListener('click', () => {
+        alertDiv.remove();
+    });
+}
+
 // 메시지 리스너 통합
 chrome.runtime.onMessage.addListener((msg) => {
     // 팝업의 '탐지 시작' 버튼 클릭 시
@@ -75,6 +103,7 @@ chrome.runtime.onMessage.addListener((msg) => {
             const targetImg = document.querySelector(`img[src="${msg.url}"]`);
             if (res && res.data && res.data.result === "가짜") {
                 if (targetImg) addBadge(targetImg, res.data.score);
+                alert("가짜(AI) 이미지입니다.");
             } else {
                 alert("정상 이미지입니다.");
             }
