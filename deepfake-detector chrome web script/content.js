@@ -10,10 +10,12 @@ async function captureVideo(video) {
 // 딱지 부착 함수
 function addBadge(imgElement, score) {
     if (imgElement.parentElement.querySelector('.df-badge')) return;
-    imgElement.parentElement.style.position = 'relative';
+    if (getComputedStyle(imgElement.parentElement).position === 'static') {
+        imgElement.parentElement.style.position = 'relative';
+    }
     const badge = document.createElement('div');
     badge.className = 'df-badge';
-    badge.innerText = `⚠️ 딥페이크 (${score})`;
+    badge.innerText = `⚠️ ${score}`;
     imgElement.parentElement.appendChild(badge);
 }
 
@@ -22,8 +24,8 @@ async function runDetectionFlow() {
     const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
 
     // 1. 영상 우선 탐지
-    if (video && video.readyState >= 2) {
-        console.log("영상을 발견했습니다. 현재 프레임 분석 중...");
+    if (video && video.readyState >= 2 && !video.ended) {
+        console.log("영상을 발견했습니다. 분석 중...");
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -37,8 +39,10 @@ async function runDetectionFlow() {
             isVideo: true
         }, (res) => {
             if (res && res.success) {
-                // 시스템 알림 대신 오버레이 창 호출
-                showVideoResultOverlay(res.data.result, res.data.score);
+                // 분석 완료 후 결과 오버레이로 업데이트
+                showResultOverlay(res.data.result, res.data.score, "영상 분석 결과");
+            } else {
+                 showResultOverlay("오류", "서버 통신 실패", "오류 발생");
             }
         });
     } 
@@ -46,26 +50,30 @@ async function runDetectionFlow() {
     else {
         console.log("영상이 없어 페이지 내 이미지를 분석합니다.");
         const images = document.querySelectorAll('img');
+        let count = 0;
         images.forEach(img => {
-            if (img.src.startsWith('http') && img.width > 50) {
+            // 너무 작거나 외부 링크가 아닌 이미지는 제외
+            if (img.src.startsWith('http') && img.width > 100 && img.height > 100) {
+                count++;
                 chrome.runtime.sendMessage({
                     action: "PROCESS_UPLOAD",
                     dataUrl: img.src,
-                    filename: "page_image.jpg",
+                    filename: `page_image_${count}.jpg`,
                     isVideo: false
                 }, (res) => {
+                    // 전수 조사는 결과창 대신 '가짜'인 경우에만 딱지 부착
                     if (res && res.data && res.data.result === "가짜") {
                         addBadge(img, res.data.score);
                     }
                 });
             }
         });
+        if (count === 0) alert("분석할 만한 이미지가 없습니다.");
     }
 }
 
-// 영상 분석 결과를 화면에 띄우는 함수
-function showVideoResultOverlay(result, score) {
-    // 기존 창이 있으면 제거
+// 분석 결과를 화면에 띄우는 함수
+function showResultOverlay(result, score) {
     const existing = document.querySelector('.df-result-alert');
     if (existing) existing.remove();
 
@@ -86,31 +94,32 @@ function showVideoResultOverlay(result, score) {
     });
 }
 
-// 메시지 리스너 통합
-chrome.runtime.onMessage.addListener((msg) => {
+// 메시지 리스너
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // 팝업의 '탐지 시작' 버튼 클릭 시
     if (msg.action === "START_DETECTION_FLOW") {
         runDetectionFlow();
     }
-    // 이미지 우클릭 탐지 클릭 시
+    
+    // 이미지 우클릭 메뉴 클릭 시
     if (msg.action === "SCAN_RIGHT_CLICKED") {
+        //console.log("우클릭 이미지 분석 시작...");
+        //showResultOverlay("분석 중...", "서버로 전송하고 있습니다.", "이미지 분석");
+
         chrome.runtime.sendMessage({
             action: "PROCESS_UPLOAD",
             dataUrl: msg.url,
             filename: "context_menu.jpg",
             isVideo: false
         }, (res) => {
-            const targetImg = document.querySelector(`img[src="${msg.url}"]`);
-            if (res && res.data && res.data.result === "가짜") {
-                if (targetImg) addBadge(targetImg, res.data.score);
-                alert("가짜(AI) 이미지입니다.");
+            if (res && res.success) {
+                showResultOverlay(res.data.result, res.data.score, "이미지 분석 결과");
             } else {
-                alert("정상 이미지입니다.");
+                showResultOverlay("오류", "분석에 실패했습니다.", "오류 발생");
             }
         });
     }
 });
-
 // 영상 프레임을 데이터 URL(Base64)로 변환하는 함수
 async function getFrameAsDataUrl(video) {
     const canvas = document.createElement('canvas');

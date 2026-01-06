@@ -1,19 +1,4 @@
-/* 기존 .df-badge 스타일 유지 */
-.df-badge {
-    position: absolute;
-    top: 5px;
-    left: 5px;
-    background: rgba(220, 53, 69, 0.9);
-    color: white;
-    padding: 3px 8px;
-    border-radius: 3px;
-    font-size: 11px;
-    font-weight: bold;
-    z-index: 2147483647;
-    pointer-events: none;
-}
-
-/* 영상 분석 결과 알림창 스타일 추가 */
+/* 영상 및 이미지 분석 결과 알림창 스타일 수정 */
 .df-result-alert {
     position: fixed;
     top: 20px;
@@ -21,19 +6,51 @@
     transform: translateX(-50%);
     background: white;
     border: 2px solid #007bff;
-    border-radius: 10px;
-    padding: 20px 40px;
+    border-radius: 8px;
+    
+    /* 1. 크기 조정: 패딩을 줄여서 창 크기를 슬림하게 만듭니다 */
+    padding: 15px 25px; 
+    min-width: 250px; 
+    
     box-shadow: 0 4px 15px rgba(0,0,0,0.3);
     z-index: 2147483647;
     text-align: center;
     font-family: 'Malgun Gothic', sans-serif;
+    
+    /* 2. 기본 글자 색상: 회색을 방지하기 위해 진한 검은색(#222)으로 설정 */
+    color: #222 !important; 
 }
 
-.df-result-alert h3 { margin: 0 0 10px 0; font-size: 1.5rem; }
-.df-result-alert p { margin: 5px 0; font-size: 1.1rem; }
-.df-result-alert button { 
-    margin-top: 15px; padding: 8px 20px; 
-    background: #007bff; color: white; border: none; 
-    border-radius: 5px; cursor: pointer; 
+/* 제목 스타일 조정 */
+.df-result-alert h3 { 
+    margin: 0 0 8px 0; 
+    font-size: 1.2rem; /* 글자 크기를 살짝 줄임 */
+    color: #000; /* 제목은 완전 검은색 */
 }
-.df-result-alert.fake { border-color: #dc3545; color: #dc3545; }
+
+/* 본문(판별 결과, 점수) 스타일 조정 */
+.df-result-alert p { 
+    margin: 3px 0; 
+    font-size: 1rem; 
+    color: #333; /* 본문도 진한 색상으로 고정 */
+}
+
+/* 가짜(Fake)일 때의 강조 스타일 */
+.df-result-alert.fake { 
+    border-color: #dc3545; 
+}
+.df-result-alert.fake h3, .df-result-alert.fake strong { 
+    color: #dc3545; /* 가짜일 때는 빨간색으로 강조 */
+}
+
+/* 닫기 버튼 스타일 */
+.df-result-alert button { 
+    margin-top: 12px; 
+    padding: 6px 15px; 
+    background: #007bff; 
+    color: white; 
+    border: none; 
+    border-radius: 4px; 
+    cursor: pointer;
+    font-weight: bold;
+}
