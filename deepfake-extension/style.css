@@ -1,0 +1,62 @@
+/* 유튜브 분석 버튼 스타일 */
+#sg-yt-button {
+    background-color: #cc0000 !important;
+    color: white !important;
+    padding: 10px 20px !important;
+    border-radius: 20px !important;
+    font-size: 16px !important;
+    font-weight: bold !important;
+    border: none !important;
+    cursor: pointer !important;
+    margin: 10px 0 !important;
+    display: flex;
+    align-items: center;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+    z-index: 999;
+}
+
+#sg-yt-button:hover {
+    background-color: #ff0000 !important;
+}
+
+/* 이미지 위 돋보기 버튼 스타일 */
+#sg-floating-btn {
+    position: absolute;
+    z-index: 10000;
+    background: #007bff;
+    color: white;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    display: none; /* 기본은 숨김 */
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    border: 3px solid white;
+}
+
+#sg-floating-btn:hover {
+    background: #0056b3;
+    transform: scale(1.1);
+}
+
+/* 결과 표시 오버레이 (화면 상단 고정) */
+#sg-result-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 20px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 24px;
+    z-index: 2147483647; /* 최상단 */
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    display: none; /* 기본 숨김 */
+}
+
+.sg-real { background-color: #e3f2fd; color: #1976d2; border-bottom: 5px solid #1976d2; }
+.sg-fake { background-color: #ffebee; color: #d32f2f; border-bottom: 5px solid #d32f2f; }
+.sg-loading { background-color: #fff3cd; color: #856404; font-size: 20px; }

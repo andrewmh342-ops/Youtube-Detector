@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "실버 가드: 원클릭 딥페이크 탐지",
+  "version": "2.0",
+  "description": "유튜브 화면에 분석 버튼을 추가하고, 이미지 위에 돋보기 아이콘을 띄웁니다.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["*://*/*", "http://localhost:20408/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://*/*"],
+      "css": ["style.css"],  
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

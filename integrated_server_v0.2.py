@@ -1,0 +1,228 @@
+import os
+import torch
+import pandas as pd
+import numpy as np
+from PIL import Image
+import cv2
+from diffusers import AutoencoderKL
+import lpips
+from pillow_heif import register_heif_opener
+register_heif_opener()
+from fastapi.responses import HTMLResponse
+from torchvision import transforms
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+import shutil
+from typing import List
+
+#pip install torch torchvision pandas numpy Pillow opencv-python diffusers lpips pillow-heif fastapi uvicorn python-multipart transformers accelerate
+
+# ================= 1. 설정 및 경로 =================
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL_DIR = "local_models"
+UPLOAD_DIR = "uploads"
+THRESHOLD = 0.055 # AEROBLADE 판별 임계값
+
+if not os.path.exists(UPLOAD_DIR):
+    os.makedirs(UPLOAD_DIR)
+
+#face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+# ================= 2. AerobladeScanner 클래스 =================
+class AerobladeScanner:
+    def __init__(self, model_dir, device=DEVICE):
+        self.device = device
+        self.vaes = {}
+        self.model_dir = model_dir
+        
+        print(f"=== 시스템 정보: {self.device.upper()} 모드로 실행 중 ===")
+        self._prepare_models()
+        self._load_models()
+
+        self.transform = transforms.Compose([
+            transforms.Resize((512, 512)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]) 
+        ])
+
+    def _prepare_models(self):
+        """필요한 모델이 없으면 다운로드"""
+        if not os.path.exists(self.model_dir):
+            os.makedirs(self.model_dir)
+        
+        # 모델 리스트 (이름, 허깅페이스 경로)
+        models = {
+            "vae_sd1.5": "stabilityai/sd-vae-ft-mse",
+            "vae_sd2.1": "stabilityai/sd-vae-ft-ema",
+            "vae_sdxl": "stabilityai/sdxl-vae"
+        }
+        
+        for folder, hub_path in models.items():
+            path = os.path.join(self.model_dir, folder)
+            if not os.path.exists(path):
+                print(f"다운로드 중: {folder}...")
+                AutoencoderKL.from_pretrained(hub_path).save_pretrained(path)
+
+        # LPIPS 가중치 확인
+        lpips_path = os.path.join(self.model_dir, "lpips_vgg.pth")
+        if not os.path.exists(lpips_path):
+            print("LPIPS 가중치 저장 중...")
+            lpips_model = lpips.LPIPS(net='vgg', pretrained=True)
+            torch.save(lpips_model.state_dict(), lpips_path)
+
+    def _load_models(self):
+        """모델을 VRAM/RAM에 로드"""
+        print("모델 로딩 중...")
+        try:
+            self.vaes['sd1.5'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd1.5")).to(self.device).eval()
+            self.vaes['sd2.1'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd2.1")).to(self.device).eval()
+            self.vaes['sdxl'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sdxl")).to(self.device).eval()
+
+            self.lpips_loss = lpips.LPIPS(net='vgg', pretrained=False).to(self.device)
+            self.lpips_loss.load_state_dict(torch.load(os.path.join(self.model_dir, "lpips_vgg.pth"), map_location=self.device))
+            self.lpips_loss.eval()
+            print("✅ 모든 모델 로드 완료.")
+        except Exception as e:
+            print(f"❌ 모델 로딩 실패: {e}")
+
+    def check_digital_traces(self, img_path):
+        """1차 검사: 메타데이터 AI 흔적 확인"""
+        try:
+            with Image.open(img_path) as img:
+                if img.info:
+                    keywords = ['parameters', 'prompt', 'negative prompt', 'steps:']
+                    for key in img.info.keys():
+                        if key.lower() in keywords:
+                            return True
+        except: pass
+        return False
+
+    def get_score(self, img_path):
+        """2차 검사: AEROBLADE 재구성 오차 계산"""
+        try:
+            image = Image.open(img_path).convert("RGB")
+            img_tensor = self.transform(image).unsqueeze(0).to(self.device)
+            
+            errors = []
+            with torch.no_grad():
+                for name, vae in self.vaes.items():
+                    recon = vae(img_tensor).sample
+                    loss = self.lpips_loss(img_tensor, recon).item()
+                    errors.append(loss)
+            return min(errors)
+        except Exception as e:
+            # [수정] 터미널 창에 구체적으로 어떤 에러가 났는지 출력합니다.
+            print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
+            return 999.0
+        
+    def process_video(self, video_path, target_samples=30):
+            """
+            영상을 불러와 길이에 따라 프레임을 샘플링하고 딥페이크 여부 판별
+            """
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            if total_frames == 0:
+                return 999.0, "파일 오류"
+
+            # 영상 길이에 관계없이 target_samples(예: 30장)만큼 추출하도록 간격 계산
+            dynamic_sample_rate = max(1, total_frames // target_samples)
+            
+            scores = []
+            current_frame = 0
+            extracted_count = 0
+
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret: break
+                
+                if current_frame % dynamic_sample_rate == 0:
+                    # 프레임을 임시 이미지 파일로 저장하거나 바로 PIL로 변환하여 분석
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(frame_rgb)
+                    
+                    # 기존 get_score 로직 활용 (함수 내부를 리팩토링하여 텐서를 직접 받게 하면 더 빠름)
+                    # 여기서는 편의상 임시 저장 후 get_score를 호출하거나 내부 로직을 직접 수행
+                    img_tensor = self.transform(pil_img).unsqueeze(0).to(self.device)
+                    
+                    with torch.no_grad():
+                        errors = []
+                        for name, vae in self.vaes.items():
+                            recon = vae(img_tensor).sample
+                            loss = self.lpips_loss(img_tensor, recon).item()
+                            errors.append(loss)
+                        scores.append(min(errors))
+                    
+                    extracted_count += 1
+                    if extracted_count >= target_samples:
+                        break
+                
+                current_frame += 1
+            
+            cap.release()
+            
+            if not scores: return 999.0, "분석 불가"
+            
+            # 평균 점수 계산 (AEROBLADE는 점수가 낮을수록 가짜일 확률이 높음)
+            avg_score = sum(scores) / len(scores)
+            verdict = "가짜" if avg_score < THRESHOLD else "진짜"
+            return avg_score, verdict
+
+# ================= 3. FastAPI 서버 설정 =================
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+scanner = AerobladeScanner(MODEL_DIR)
+
+@app.get("/", response_class=HTMLResponse)
+async def read_index():
+    with open("index.html", "r", encoding="utf-8") as f:
+        return f.read()
+    
+@app.post("/upload")
+async def detect_files(files: List[UploadFile] = File(...)):
+    results = []
+    video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
+
+    for file in files:
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # 영상 파일인지 확인
+        if file_ext in video_extensions:
+            # 영상 분석 (목표 샘플 수 30개)
+            score, verdict = scanner.process_video(file_path, target_samples=30)
+            method = "AEROBLADE (영상 프레임 분석)"
+        else:
+            # 이미지 분석
+            has_watermark = scanner.check_digital_traces(file_path)
+            if has_watermark:
+                verdict, score, method = "가짜", 0.0, "메타데이터 흔적 감지"
+            else:
+                score = scanner.get_score(file_path)
+                verdict = "가짜" if score < THRESHOLD else "진짜"
+                method = "AEROBLADE (이미지 분석)"
+        
+        print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method})")
+
+        results.append({
+            "filename": file.filename,
+            "result": verdict,
+            "score": round(score, 5),
+            "method": method
+        })
+
+    return results # 전체 결과 리스트 반환
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=20408) # 로컬 호스트에서 실행 host="127.0.0.1" | 외부 접속 허용 host="0.0.0.0"
