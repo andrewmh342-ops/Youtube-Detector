@@ -94,22 +94,21 @@ class AerobladeScanner:
                             return True
         except: pass
         return False
-
+    
     def get_complexity(self, img_path):
-        """이미지의 시각적 복잡도를 계산 (0.0 ~ 1.0)"""
+        """이미지의 시각적 복잡도를 계산 (한글 경로 지원 버전)"""
         try:
-            # OpenCV를 이용해 그레이스케일로 로드
-            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            # cv2.imread 대신 numpy를 사용하여 한글 경로 지원
+            img_array = np.fromfile(img_path, np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
+            
             if img is None: return 0.5
             
-            # 라플라시안 분산으로 에지 강도 측정
             laplacian_var = cv2.Laplacian(img, cv2.CV_64F).var()
-            
-            # 로그 스케일 정규화 (보통 0~500 사이 값을 0~1로 매핑)
-            # 수치 7.0은 데이터 특성에 따라 6.0~8.0 사이로 조정 가능합니다.
             complexity = np.clip(np.log1p(laplacian_var) / 7.0, 0, 1)
             return float(complexity)
-        except:
+        except Exception as e:
+            print(f"복잡도 계산 실패: {e}")
             return 0.5
 
     def get_score(self, img_path):
@@ -266,7 +265,7 @@ async def detect_files(files: List[UploadFile] = File(...)):
                 verdict = "가짜" if score < current_threshold else "진짜"
                 method = "AEROBLADE (이미지 분석)"
         
-        print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method})")
+        print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method}), 적용 임계값: {current_threshold:.5f})")
 
         # 이제 모든 변수가 할당되었으므로 에러가 발생하지 않음
         results.append({
