@@ -16,14 +16,15 @@ import uvicorn
 import shutil
 from typing import List
 
-#pip install torch torchvision pandas numpy Pillow opencv-python diffusers lpips pillow-heif fastapi uvicorn python-multipart transformers accelerate
+#pip install torch torchvision pandas numpy Pillow opencv-python diffusers lpips pillow-heif fastapi uvicorn python-multipart transformers accelerate huggingface_hub
 
 # ================= 1. 설정 및 경로 =================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
 UPLOAD_DIR = "uploads"
 THRESHOLD = 0.055  # AEROBLADE 판별 임계값
-
+image_min_ratio = 0.6  #이미지 적응형 임계값 비율
+video_min_ratio = 0.7  #영상 적응형 임계값 비율
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 # ================= 2. AerobladeScanner 클래스 =================
@@ -50,16 +51,24 @@ class AerobladeScanner:
         
         # 모델 리스트 (이름, 허깅페이스 경로)
         models = {
-            "vae_sd1.5": "stabilityai/sd-vae-ft-mse",
-            "vae_sd2.1": "stabilityai/sd-vae-ft-ema",
-            "vae_sdxl": "stabilityai/sdxl-vae"
+            "vae_sd1.5": ("stabilityai/sd-vae-ft-mse", None),
+            "vae_sd2.1": ("stabilityai/sd-vae-ft-ema", None),
+            "vae_sdxl": ("stabilityai/sdxl-vae", None),
+            "vae_sd3": ("stabilityai/stable-diffusion-3-medium-diffusers", "vae") # 터미널에 huggingface-cli login 로 토큰 필요
         }
         
-        for folder, hub_path in models.items():
+        for folder, (hub_path, subfolder) in models.items():
             path = os.path.join(self.model_dir, folder)
             if not os.path.exists(path):
                 print(f"다운로드 중: {folder}...")
-                AutoencoderKL.from_pretrained(hub_path).save_pretrained(path)
+                try:
+                    # subfolder 인자가 있을 경우 적용하여 다운로드
+                    if subfolder:
+                        AutoencoderKL.from_pretrained(hub_path, subfolder=subfolder).save_pretrained(path)
+                    else:
+                        AutoencoderKL.from_pretrained(hub_path).save_pretrained(path)
+                except Exception as e:
+                    print(f"❌ {folder} 다운로드 실패: {e}")
 
         # LPIPS 가중치 확인
         lpips_path = os.path.join(self.model_dir, "lpips_vgg.pth")
@@ -75,6 +84,7 @@ class AerobladeScanner:
             self.vaes['sd1.5'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd1.5")).to(self.device).eval()
             self.vaes['sd2.1'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd2.1")).to(self.device).eval()
             self.vaes['sdxl'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sdxl")).to(self.device).eval()
+            self.vaes['sd3'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd3")).to(self.device).eval()
 
             self.lpips_loss = lpips.LPIPS(net='vgg', pretrained=False).to(self.device)
             self.lpips_loss.load_state_dict(torch.load(os.path.join(self.model_dir, "lpips_vgg.pth"), map_location=self.device))
@@ -123,8 +133,7 @@ class AerobladeScanner:
             # 2. 적응형 임계값 산출 (기본 0.055 기준)
             # 단순한 이미지(complexity 낮음)일수록 하한선(0.6)에 가까워져 임계값이 낮아짐
             base_threshold = 0.055
-            min_ratio = 0.6
-            adaptive_threshold = base_threshold * (min_ratio + (1 - min_ratio) * complexity)
+            adaptive_threshold = base_threshold * (image_min_ratio + (1 - image_min_ratio) * complexity)
 
             # 3. VAE 재구성 오차(LPIPS) 계산
             image = Image.open(img_path).convert("RGB")
@@ -209,8 +218,8 @@ class AerobladeScanner:
         avg_complexity = sum(complexities) / len(complexities)
         
         base_threshold = 0.055
-        min_ratio = 0.6
-        adaptive_threshold = base_threshold * (min_ratio + (1 - min_ratio) * avg_complexity)
+
+        adaptive_threshold = base_threshold * (video_min_ratio + (1 - video_min_ratio) * avg_complexity)
         
         verdict = "가짜" if avg_score < adaptive_threshold else "진짜"
         
