@@ -22,7 +22,7 @@ from typing import List
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
 UPLOAD_DIR = "uploads"
-THRESHOLD = 0.055  # AEROBLADE 판별 임계값
+THRESHOLD = 0.05  # AEROBLADE 판별 임계값
 image_min_ratio = 0.6  #이미지 적응형 임계값 비율
 video_min_ratio = 0.7  #영상 적응형 임계값 비율
 if not os.path.exists(UPLOAD_DIR):
@@ -122,38 +122,31 @@ class AerobladeScanner:
             return 0.5
 
     def get_score(self, img_path):
-        """
-        2차 검사: AEROBLADE 재구성 오차 및 적응형 임계값 계산
-        반환값: (최저 오차 점수, 이미지 복잡도, 적용된 임계값)
-        """
-        try:
-            # 1. 이미지 복잡도 계산
-            complexity = self.get_complexity(img_path)
-            
-            # 2. 적응형 임계값 산출 (기본 0.055 기준)
-            # 단순한 이미지(complexity 낮음)일수록 하한선(0.6)에 가까워져 임계값이 낮아짐
-            base_threshold = 0.055
-            adaptive_threshold = base_threshold * (image_min_ratio + (1 - image_min_ratio) * complexity)
+            try:
+                complexity = self.get_complexity(img_path)
+                adaptive_threshold = THRESHOLD * (image_min_ratio + (1 - image_min_ratio) * complexity)
 
-            # 3. VAE 재구성 오차(LPIPS) 계산
-            image = Image.open(img_path).convert("RGB")
-            img_tensor = self.transform(image).unsqueeze(0).to(self.device)
-            
-            errors = []
-            with torch.no_grad():
-                for name, vae in self.vaes.items():
-                    recon = vae(img_tensor).sample
-                    loss = self.lpips_loss(img_tensor, recon).item()
-                    errors.append(loss)
-            
-            min_error = min(errors)
-            
-            # (점수, 복잡도, 임계값) 세 가지 정보를 모두 반환
-            return min_error, complexity, adaptive_threshold
+                image = Image.open(img_path).convert("RGB")
+                img_tensor = self.transform(image).unsqueeze(0).to(self.device)
+                
+                # 모델별 에러를 저장할 딕셔너리
+                error_dict = {}
+                with torch.no_grad():
+                    for name, vae in self.vaes.items():
+                        recon = vae(img_tensor).sample
+                        loss = self.lpips_loss(img_tensor, recon).item()
+                        error_dict[name] = loss
+                
+                # 가장 낮은 에러를 가진 모델 이름 찾기
+                detected_model = min(error_dict, key=error_dict.get)
+                min_error = error_dict[detected_model]
+                
+                # (점수, 복잡도, 임계값, 탐지된 모델명) 반환
+                return min_error, complexity, adaptive_threshold, detected_model
 
-        except Exception as e:
-            print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
-            return 999.0, 0.5, 0.055
+            except Exception as e:
+                print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
+                return 999.0, 0.5, 0.055, "Unknown"
         
     def get_complexity_from_frame(self, frame_cv2):
         """프레임(Numpy Array)으로부터 직접 복잡도 계산"""
@@ -166,64 +159,52 @@ class AerobladeScanner:
             return 0.5
 
     def process_video(self, video_path, target_samples=30):
-        """
-        영상을 샘플링하여 평균 점수와 평균 복잡도에 따른 판별 수행
-        반환값: (평균 점수, 평균 복잡도, 적용된 임계값, 최종 판정)
-        """
-        cap = cv2.VideoCapture(video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        if total_frames == 0:
-            return 999.0, 0.5, 0.055, "파일 오류"
+            cap = cv2.VideoCapture(video_path)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total_frames == 0: return 999.0, 0.5, 0.055, "파일 오류", "None"
 
-        dynamic_sample_rate = max(1, total_frames // target_samples)
-        
-        scores = []
-        complexities = []
-        current_frame = 0
-        extracted_count = 0
-
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret: break
+            dynamic_sample_rate = max(1, total_frames // target_samples)
             
-            if current_frame % dynamic_sample_rate == 0:
-                # 1. 복잡도 계산 (프레임에서 직접)
-                complexities.append(self.get_complexity_from_frame(frame))
-                
-                # 2. AEROBLADE 점수 계산
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(frame_rgb)
-                img_tensor = self.transform(pil_img).unsqueeze(0).to(self.device)
-                
-                with torch.no_grad():
-                    errors = []
-                    for name, vae in self.vaes.items():
-                        recon = vae(img_tensor).sample
-                        loss = self.lpips_loss(img_tensor, recon).item()
-                        errors.append(loss)
-                    scores.append(min(errors))
-                
-                extracted_count += 1
-                if extracted_count >= target_samples:
-                    break
-            current_frame += 1
-        
-        cap.release()
-        
-        if not scores: return 999.0, 0.5, 0.055, "분석 불가"
-        
-        # 3. 평균치 계산 및 적응형 임계값 적용
-        avg_score = sum(scores) / len(scores)
-        avg_complexity = sum(complexities) / len(complexities)
-        
-        base_threshold = 0.055
+            # 모델별 점수 합계를 저장할 딕셔너리
+            model_total_errors = {name: 0.0 for name in self.vaes.keys()}
+            complexities = []
+            extracted_count = 0
+            current_frame = 0
 
-        adaptive_threshold = base_threshold * (video_min_ratio + (1 - video_min_ratio) * avg_complexity)
-        
-        verdict = "가짜" if avg_score < adaptive_threshold else "진짜"
-        
-        return avg_score, avg_complexity, adaptive_threshold, verdict
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret: break
+                
+                if current_frame % dynamic_sample_rate == 0:
+                    complexities.append(self.get_complexity_from_frame(frame))
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(frame_rgb)
+                    img_tensor = self.transform(pil_img).unsqueeze(0).to(self.device)
+                    
+                    with torch.no_grad():
+                        for name, vae in self.vaes.items():
+                            recon = vae(img_tensor).sample
+                            loss = self.lpips_loss(img_tensor, recon).item()
+                            model_total_errors[name] += loss # 점수 누적
+                    
+                    extracted_count += 1
+                    if extracted_count >= target_samples: break
+                current_frame += 1
+            cap.release()
+            
+            # 모델별 평균 점수 계산
+            avg_errors = {name: total / extracted_count for name, total in model_total_errors.items()}
+            # 가장 평균 점수가 낮은 모델 선택
+            detected_model = min(avg_errors, key=avg_errors.get)
+            avg_score = avg_errors[detected_model]
+            
+            avg_complexity = sum(complexities) / len(complexities)
+            base_threshold = 0.055
+            adaptive_threshold = base_threshold * (video_min_ratio + (1 - video_min_ratio) * avg_complexity)
+            
+            verdict = "가짜" if avg_score < adaptive_threshold else "진짜"
+            
+            return avg_score, avg_complexity, adaptive_threshold, verdict, detected_model
 
 # ================= 3. FastAPI 서버 설정 =================
 app = FastAPI()
@@ -257,35 +238,33 @@ async def detect_files(files: List[UploadFile] = File(...)):
         # 초기값 설정 (에러 방지 핵심)
         current_threshold = THRESHOLD
         complexity = 0.5
-        method = "알 수 없음"
+        detected_model = "N/A" # 초기값
 
         if file_ext in video_extensions:
-            # 영상 분석: 4개 값 수신
-            score, complexity, current_threshold, verdict = scanner.process_video(file_path)
+            # 영상 분석: 반환값이 5개로 늘어남
+            score, complexity, current_threshold, verdict, detected_model = scanner.process_video(file_path)
             method = "AEROBLADE (영상 분석)"
         else:
-            # 이미지 분석
             has_watermark = scanner.check_digital_traces(file_path)
             if has_watermark:
-                verdict, score, complexity, current_threshold, method = "가짜", 0.0, 0.5, 0.0, "메타데이터 흔적"
+                verdict, score, complexity, current_threshold, method, detected_model = "가짜", 0.0, 0.5, 0.0, "메타데이터 흔적", "Metadata"
             else:
-                # 이미지 분석: 3개 값 수신
-                score, complexity, current_threshold = scanner.get_score(file_path)
+                # 이미지 분석: 반환값이 4개로 늘어남
+                score, complexity, current_threshold, detected_model = scanner.get_score(file_path)
                 verdict = "가짜" if score < current_threshold else "진짜"
                 method = "AEROBLADE (이미지 분석)"
-        
-        print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method}), 적용 임계값: {current_threshold:.5f})")
+        print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method}), 적용 임계값: {current_threshold:.5f}), 복잡도: {complexity:.3f}, 탐지된 모델: {detected_model}")
 
-        # 이제 모든 변수가 할당되었으므로 에러가 발생하지 않음
+        # 결과 저장
         results.append({
             "filename": file.filename,
             "result": verdict,
+            "detected_source": detected_model, # 어떤 모델인지 반환
             "score": round(score, 5),
             "threshold_used": round(current_threshold, 5),
             "complexity": round(complexity, 3),
             "method": method
         })
-
     return results # 전체 결과 리스트 반환
 
 if __name__ == "__main__":
