@@ -44,6 +44,14 @@ class AerobladeScanner:
             transforms.Normalize([0.5], [0.5]) 
         ])
 
+        # 모델별 기본 임계값 설정 (SD3는 성능이 좋아 낮게 설정)
+        self.base_thresholds = {
+            'sd1.5': 0.055,
+            'sd2.1': 0.050,
+            'sdxl': 0.045,
+            'sd3': 0.018  # SD3를 위해 대폭 낮춘 임계값
+        }
+
     def _prepare_models(self):
         """필요한 모델이 없으면 다운로드"""
         if not os.path.exists(self.model_dir):
@@ -122,31 +130,34 @@ class AerobladeScanner:
             return 0.5
 
     def get_score(self, img_path):
-            try:
-                complexity = self.get_complexity(img_path)
-                adaptive_threshold = THRESHOLD * (image_min_ratio + (1 - image_min_ratio) * complexity)
+        try:
+            complexity = self.get_complexity(img_path)
+            
+            # VAE 재구성 오차 계산
+            image = Image.open(img_path).convert("RGB")
+            img_tensor = self.transform(image).unsqueeze(0).to(self.device)
+            error_dict = {}
+            
+            with torch.no_grad():
+                for name, vae in self.vaes.items():
+                    recon = vae(img_tensor).sample
+                    loss = self.lpips_loss(img_tensor, recon).item()
+                    error_dict[name] = loss
+            
+            detected_model = min(error_dict, key=error_dict.get)
+            min_error = error_dict[detected_model]
 
-                image = Image.open(img_path).convert("RGB")
-                img_tensor = self.transform(image).unsqueeze(0).to(self.device)
-                
-                # 모델별 에러를 저장할 딕셔너리
-                error_dict = {}
-                with torch.no_grad():
-                    for name, vae in self.vaes.items():
-                        recon = vae(img_tensor).sample
-                        loss = self.lpips_loss(img_tensor, recon).item()
-                        error_dict[name] = loss
-                
-                # 가장 낮은 에러를 가진 모델 이름 찾기
-                detected_model = min(error_dict, key=error_dict.get)
-                min_error = error_dict[detected_model]
-                
-                # (점수, 복잡도, 임계값, 탐지된 모델명) 반환
-                return min_error, complexity, adaptive_threshold, detected_model
+            # [핵심] 탐지된 모델에 따라 다른 베이스 임계값 적용
+            base_thr = self.base_thresholds.get(detected_model, 0.055)
+            
+            # 적응형 임계값 계산 (해당 모델의 base_thr 기준)
+            adaptive_threshold = base_thr * (image_min_ratio + (1 - image_min_ratio) * complexity)
 
-            except Exception as e:
-                print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
-                return 999.0, 0.5, 0.055, "Unknown"
+            return min_error, complexity, adaptive_threshold, detected_model
+
+        except Exception as e:
+            print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
+            return 999.0, 0.5, 0.055, "Unknown"
         
     def get_complexity_from_frame(self, frame_cv2):
         """프레임(Numpy Array)으로부터 직접 복잡도 계산"""
@@ -194,16 +205,17 @@ class AerobladeScanner:
             
             # 모델별 평균 점수 계산
             avg_errors = {name: total / extracted_count for name, total in model_total_errors.items()}
+
             # 가장 평균 점수가 낮은 모델 선택
             detected_model = min(avg_errors, key=avg_errors.get)
             avg_score = avg_errors[detected_model]
-            
             avg_complexity = sum(complexities) / len(complexities)
-            base_threshold = 0.055
-            adaptive_threshold = base_threshold * (video_min_ratio + (1 - video_min_ratio) * avg_complexity)
+
+            # 탐지된 모델의 임계값 가져오기
+            base_thr = self.base_thresholds.get(detected_model, 0.055)
+            adaptive_threshold = base_thr * (video_min_ratio + (1 - video_min_ratio) * avg_complexity)
             
             verdict = "가짜" if avg_score < adaptive_threshold else "진짜"
-            
             return avg_score, avg_complexity, adaptive_threshold, verdict, detected_model
 
 # ================= 3. FastAPI 서버 설정 =================
