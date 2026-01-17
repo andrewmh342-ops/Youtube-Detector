@@ -137,7 +137,7 @@ class AerobladeScanner:
             image = Image.open(img_path).convert("RGB")
             img_tensor = self.transform(image).unsqueeze(0).to(self.device)
             error_dict = {}
-            
+
             with torch.no_grad():
                 for name, vae in self.vaes.items():
                     recon = vae(img_tensor).sample
@@ -265,7 +265,7 @@ async def detect_files(files: List[UploadFile] = File(...)):
                 score, complexity, current_threshold, detected_model = scanner.get_score(file_path)
                 verdict = "가짜" if score < current_threshold else "진짜"
                 method = "AEROBLADE (이미지 분석)"
-        print(f"[{file.filename}] 판별 결과: {verdict} (점수: {score:.5f}, 방법: {method}), 적용 임계값: {current_threshold:.5f}), 복잡도: {complexity:.3f}, 탐지된 모델: {detected_model}")
+        print(f"[{file.filename}] \n 판별 결과: {verdict} 점수: {score:.5f}, 방법: {method}, \n 적용 임계값: {current_threshold:.5f}), 복잡도: {complexity:.3f}, 탐지된 모델: {detected_model}")
 
         # 결과 저장
         results.append({
