@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Deepfake Detector Pro",
+  "version": "1.3",
+  "permissions": ["contextMenus", "notifications", "storage", "activeTab"],
+  "host_permissions": [
+    "http://localhost:20408/*",
+    "*://*/*" 
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["style.css"]
+    }
+  ]
+}
