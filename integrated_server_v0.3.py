@@ -23,8 +23,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
 UPLOAD_DIR = "uploads"
 THRESHOLD = 0.05  # AEROBLADE 판별 임계값
-image_min_ratio = 0.6  #이미지 적응형 임계값 비율
-video_min_ratio = 0.7  #영상 적응형 임계값 비율
+image_min_ratio = 0.8  #이미지 적응형 임계값 비율
+video_min_ratio = 0.8  #영상 적응형 임계값 비율
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 # ================= 2. AerobladeScanner 클래스 =================
@@ -46,10 +46,10 @@ class AerobladeScanner:
 
         # 모델별 기본 임계값 설정 (SD3는 성능이 좋아 낮게 설정)
         self.base_thresholds = {
-            'sd1.5': 0.055,
-            'sd2.1': 0.050,
-            'sdxl': 0.045,
-            'sd3': 0.018  # SD3를 위해 대폭 낮춘 임계값
+            'sd1.5': 0.085,
+            'sd2.1': 0.070,
+            'sdxl': 0.050,
+            'sd3': 0.0125  # SD3를 위해 대폭 낮춘 임계값
         }
 
     def _prepare_models(self):
@@ -62,7 +62,7 @@ class AerobladeScanner:
             "vae_sd1.5": ("stabilityai/sd-vae-ft-mse", None),
             "vae_sd2.1": ("stabilityai/sd-vae-ft-ema", None),
             "vae_sdxl": ("stabilityai/sdxl-vae", None),
-            "vae_sd3": ("stabilityai/stable-diffusion-3-medium-diffusers", "vae") # 터미널에 huggingface-cli login 로 토큰 필요
+            #"vae_sd3": ("stabilityai/stable-diffusion-3-medium-diffusers", "vae") # 터미널에 huggingface-cli login 로 토큰 필요
         }
         
         for folder, (hub_path, subfolder) in models.items():
@@ -92,7 +92,7 @@ class AerobladeScanner:
             self.vaes['sd1.5'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd1.5")).to(self.device).eval()
             self.vaes['sd2.1'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd2.1")).to(self.device).eval()
             self.vaes['sdxl'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sdxl")).to(self.device).eval()
-            self.vaes['sd3'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd3")).to(self.device).eval()
+            #self.vaes['sd3'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd3")).to(self.device).eval()
 
             self.lpips_loss = lpips.LPIPS(net='vgg', pretrained=False).to(self.device)
             self.lpips_loss.load_state_dict(torch.load(os.path.join(self.model_dir, "lpips_vgg.pth"), map_location=self.device))
@@ -116,7 +116,6 @@ class AerobladeScanner:
     def get_complexity(self, img_path):
         """이미지의 시각적 복잡도를 계산 (한글 경로 지원 버전)"""
         try:
-            # cv2.imread 대신 numpy를 사용하여 한글 경로 지원
             img_array = np.fromfile(img_path, np.uint8)
             img = cv2.imdecode(img_array, cv2.IMREAD_GRAYSCALE)
             
@@ -277,6 +276,17 @@ async def detect_files(files: List[UploadFile] = File(...)):
             "complexity": round(complexity, 3),
             "method": method
         })
+
+    if results:
+        df = pd.DataFrame(results)
+        csv_path = "detection_history.csv"
+        
+        # 파일이 없으면 새로 만들고(header 포함), 있으면 내용만 추가(mode='a')
+        if not os.path.exists(csv_path):
+            df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+        else:
+            df.to_csv(csv_path, index=False, mode='a', header=False, encoding='utf-8-sig')
+            
     return results # 전체 결과 리스트 반환
 
 if __name__ == "__main__":
