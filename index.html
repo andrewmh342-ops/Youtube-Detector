@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Deepfake Detector (Aeroblade Ensemble)</title>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f0f2f5; padding: 40px; }
+        #drop-zone {
+            width: 600px; height: 150px; border: 3px dashed #007bff; border-radius: 15px;
+            display: flex; align-items: center; justify-content: center;
+            background-color: white; cursor: pointer; font-size: 1.1rem; font-weight: bold; margin-bottom: 25px;
+            transition: background-color 0.3s, border-color 0.3s;
+        }
+        #drop-zone.dragover { background-color: #e3f2fd; border-color: #0056b3; }
+        
+        #result-container { width: 600px; display: none; }
+        .result-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        
+        .info-row { display: flex; justify-content: space-between; margin: 8px 0; font-size: 0.95rem; color: #444; border-bottom: 1px dashed #eee; padding-bottom: 5px; }
+        .info-label { font-weight: bold; color: #555; }
+        
+        /* 앙상블 스코어 바 스타일 */
+        .score-bar-container { width: 100%; background-color: #eee; height: 14px; border-radius: 7px; margin: 15px 0; overflow: hidden; position: relative; }
+        .score-bar { height: 100%; transition: width 0.8s ease-in-out; }
+        
+        .verdict-box { 
+            margin-top: 20px; padding: 15px; border-radius: 8px; text-align: center; 
+            font-size: 1.3rem; font-weight: bold; 
+        }
+        .fake { background-color: #ffebee; color: #d32f2f; border: 1px solid #ffcdd2; }
+        .real { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
+        
+        .reason-text { font-size: 0.85rem; color: #777; margin-top: 10px; text-align: center; }
+        #loading { display: none; font-weight: bold; color: #007bff; margin-bottom: 20px; }
+        
+        .model-tag { font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #e9ecef; margin-left: 5px; color: #495057; font-weight: normal; }
+        .prob-val { font-weight: bold; color: #333; }
+    </style>
+</head>
+<body>
+
+    <h2>Aeroblade 지능형 앙상블 탐지 시스템</h2>
+    <div id="drop-zone">이미지나 영상을 드래그하거나 클릭하여 업로드하세요</div>
+    <input type="file" id="file-input" style="display:none" accept="image/*,video/*" multiple>
+
+    <div id="loading">🛡️ AI 앙상블 모델 분석 중... (Aeroblade + EfficientNet)</div>
+    <div id="result-container"></div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const resultContainer = document.getElementById('result-container');
+        const loading = document.getElementById('loading');
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        dropZone.ondragover = (e) => {
+            e.preventDefault(); 
+            dropZone.classList.add('dragover');
+        };
+
+        dropZone.ondragleave = () => {
+            dropZone.classList.remove('dragover');
+        };
+
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files); 
+        };
+
+        async function handleFiles(files) {
+            if (files.length === 0) return;
+            resultContainer.innerHTML = "";
+            resultContainer.style.display = "none";
+            loading.style.display = "block";
+
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append('files', files[i]);
+            }
+
+            try {
+                // 앙상블 서버 주소
+                const response = await fetch('http://localhost:20408/upload', { method: 'POST', body: formData });
+                const dataList = await response.json();
+                displayResults(dataList);
+            } catch (error) {
+                alert("분석 실패: " + error.message + "\n(서버가 켜져 있는지 확인해주세요)");
+            } finally {
+                loading.style.display = "none";
+            }
+        }
+
+        function displayResults(dataList) {
+            resultContainer.style.display = "block";
+            dataList.forEach(data => {
+                const card = document.createElement('div');
+                card.className = 'result-card';
+                
+                const isReal = data.result === "진짜"; 
+                const verdictClass = isReal ? "real" : "fake";
+                
+                // 퍼센트 계산
+                const finalFakeProb = (data.final_score * 100).toFixed(1);
+                const aeroFakeProb = (data.aero_prob * 100).toFixed(1);
+                const auxFakeProb = (data.aux_prob * 100).toFixed(1);
+                
+                card.innerHTML = `
+                    <h3 style="margin-top:0; border-bottom: 2px solid #007bff; padding-bottom:10px; color:#333;">${data.filename}</h3>
+                    
+                    <div class="info-row">
+                        <span class="info-label">판별 메커니즘</span>
+                        <span style="color:#007bff; font-weight:bold;">${data.method}</span>
+                    </div>
+
+                    <div class="info-row">
+                        <span class="info-label">에어로블레이드 기여도</span>
+                        <span><span class="prob-val">${aeroFakeProb}%</span> <span class="model-tag">LPIPS: ${data.score.toFixed(4)}</span></span>
+                    </div>
+
+                    <div class="info-row">
+                        <span class="info-label">보조 모델 기여도</span>
+                        <span><span class="prob-val">${auxFakeProb}%</span> <span class="model-tag">FF++ Weight</span></span>
+                    </div>
+
+                    <div class="info-row">
+                        <span class="info-label">이미지 복잡도</span>
+                        <span>${data.complexity}</span>
+                    </div>
+
+                    <div style="margin-top: 15px; font-size: 0.9rem; font-weight: bold; color: #555; display: flex; justify-content: space-between;">
+                        <span>종합 위조 확률 (위험도)</span>
+                        <span style="color:${isReal ? '#1976d2' : '#d32f2f'}">${finalFakeProb}%</span>
+                    </div>
+                    <div class="score-bar-container">
+                        <div class="score-bar" style="width: ${finalFakeProb}%; background-color: ${isReal ? '#1976d2' : '#d32f2f'};"></div>
+                    </div>
+                    
+                    <div class="verdict-box ${verdictClass}">
+                        최종 분석 결과 : ${data.result}
+                    </div>
+                    <div class="reason-text">💡 가짜 확률이 50% 미만이므로 안전한 <b>'진짜'</b> 데이터로 판명되었습니다.</div>
+                `;
+                
+                // 가짜일 경우 문구 수정
+                if (!isReal) {
+                    card.querySelector('.reason-text').innerHTML = `💡 가짜 확률이 50%를 초과하여 조작된 <b>'가짜'</b> 데이터로 판명되었습니다.`;
+                }
+
+                resultContainer.appendChild(card);
+            });
+        }
+    </script>
+</body>
+</html>
