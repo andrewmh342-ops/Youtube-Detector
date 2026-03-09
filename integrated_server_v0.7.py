@@ -197,35 +197,61 @@ class IntegratedScanner:
             return 999.0, 999.0, 0.5, 0.055, "Error"
 
     def process_video(self, video_path, target_samples=30):
-        """[복구] 비디오 시공간 분석 로직"""
+        """WebM 메타데이터가 없어도 작동하도록 로직 수정"""
         cap = cv2.VideoCapture(video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames == 0: return 999.0, 999.0, 0.5, 0.055, "파일 오류", "None"
+        
+        # 파일이 제대로 열렸는지 확인
+        if not cap.isOpened():
+            print(f"❌ 파일을 열 수 없음: {video_path}")
+            return 999.0, 999.0, 0.5, 0.055, "파일 오류", "None"
 
-        sample_rate = max(1, total_frames // target_samples)
-        ae_scores, fire_scores = [], []
+        ae_scores, fire_scores, complexities, thresholds = [], [], [], []
+        detected_models = []
+        frame_idx = 0
         extracted_count = 0
+        
+        # [수정] 전체 프레임 수에 의존하지 않고 루프 실행
+        # 3초 영상 기준 약 90프레임이므로, 3프레임마다 하나씩 추출 (총 30개 목표)
+        sample_interval = 3 
 
-        while cap.isOpened():
+        while True:
             ret, frame = cap.read()
-            if not ret or extracted_count >= target_samples: break
+            if not ret or extracted_count >= target_samples:
+                break
             
-            if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % sample_rate == 0:
+            # 지정된 간격마다 프레임 분석
+            if frame_idx % sample_interval == 0:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_img = Image.fromarray(frame_rgb)
                 
-                ae, fire, _, _, _ = self.get_score(pil_img)
-                ae_scores.append(ae)
-                fire_scores.append(fire)
-                extracted_count += 1
-        cap.release()
+                ae, fire, comp, thr, model = self.get_score(pil_img)
+                
+                if model != "Error":
+                    ae_scores.append(ae)
+                    fire_scores.append(fire)
+                    complexities.append(comp)
+                    thresholds.append(thr)
+                    detected_models.append(model)
+                    extracted_count += 1
+            
+            frame_idx += 1
         
+        cap.release()
+
+        # 분석된 프레임이 하나도 없는 경우
+        if not ae_scores:
+            print("❌ 유효한 프레임을 추출하지 못했습니다.")
+            return 999.0, 999.0, 0.5, 0.055, "분석 실패", "None"
+        
+        # 평균 계산 및 결과 반환 (이전과 동일)
         avg_ae = sum(ae_scores) / len(ae_scores)
         avg_fire = sum(fire_scores) / len(fire_scores)
+        avg_comp = sum(complexities) / len(complexities)
+        avg_thr = sum(thresholds) / len(thresholds)
+        most_common_model = max(set(detected_models), key=detected_models.count)
         
-        # 비디오용 판별
-        verdict = "가짜" if (avg_ae < 0.05) or (avg_fire < 0.15) else "진짜"
-        return avg_ae, avg_fire, 0.5, 0.05, verdict, "Video_Model"
+        verdict = "가짜" if (avg_ae < avg_thr * 0.9) or (avg_fire < 45.0) else "진짜"
+        return avg_ae, avg_fire, avg_comp, avg_thr, verdict, most_common_model
 
 # ================= 3. FastAPI 서버 및 엔드포인트 =================
 app = FastAPI()
@@ -245,18 +271,18 @@ async def detect_files(files: List[UploadFile] = File(...)):
     for file in files:
         ext = os.path.splitext(file.filename)[1].lower()
         path = os.path.join(UPLOAD_DIR, file.filename)
-        with open(path, "wb") as buffer: shutil.copyfileobj(file.file, buffer)
+        with open(path, "wb") as buffer: 
+            shutil.copyfileobj(file.file, buffer)
 
         if ext in video_exts:
+            # 수정된 부분: 이제 process_video도 이미지와 동일한 6개 인자를 반환합니다.
             ae, fire, comp, thr, verdict, model = scanner.process_video(path)
             method = "AEROBLADE + FIRE (Video)"
         else:
-            # 이미지 1차 메타데이터 검사
             if scanner.check_digital_traces(path):
                 verdict, ae, fire, comp, thr, method, model = "가짜", 0.0, 0.0, 0.5, 0.0, "메타데이터", "Metadata"
             else:
                 ae, fire, comp, thr, model = scanner.get_score(path)
-                # 하이브리드 판별 (AE 임계값 미만 OR FIRE 점수 임계값 미만)
                 verdict = "가짜" if (ae < thr*0.9) or (fire < 45.0) else "진짜"
                 method = "AEROBLADE + FIRE (Image)"
 
