@@ -260,7 +260,7 @@ scanner = IntegratedScanner(MODEL_DIR)
 
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
-    with open("index.html", "r", encoding="utf-8") as f:
+    with open("index_0.7.html", "r", encoding="utf-8") as f:
         return f.read()
 
 @app.post("/upload")
