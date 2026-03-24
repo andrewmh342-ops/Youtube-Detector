@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/26207121/README.md)
+[README.md](https://github.com/user-attachments/files/26207251/README.md)
  Aeroblade Ensemble: Real-time Deepfake Detection & Defense Network
 A comprehensive deepfake detection system featuring a FastAPI backend for ensemble analysis and a Chrome Extension for real-time monitoring and collective intelligence-based URL blacklisting.
 
@@ -36,14 +36,16 @@ Google Chrome Browser
 1. Server Setup
 Clone the repository and install dependencies:
 
-Bash
+```Bash
 pip install fastapi uvicorn torch torchvision pillow-heif diffusers lpips pandas opencv-python
+```
 Place your pre-trained models in the local_models/ directory.
 
 Run the server:
 
-Bash
+```bash
 python integrated_server.py
+```
 The server will be accessible at http://localhost:80 (or your configured domain).
 
 2. Extension Installation
