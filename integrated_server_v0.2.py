@@ -26,9 +26,6 @@ THRESHOLD = 0.065  # AEROBLADE 판별 임계값
 
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
-
-#face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
 # ================= 2. AerobladeScanner 클래스 =================
 class AerobladeScanner:
     def __init__(self, model_dir, device=DEVICE):
@@ -112,7 +109,6 @@ class AerobladeScanner:
                     errors.append(loss)
             return min(errors)
         except Exception as e:
-            # [수정] 터미널 창에 구체적으로 어떤 에러가 났는지 출력합니다.
             print(f"❌ 분석 중 에러 발생 ({img_path}): {e}")
             return 999.0
         
