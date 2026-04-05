@@ -49,7 +49,7 @@ Run the server:
 ```bash
 python integrated_server.py
 ```
-The server will be accessible at http://localhost:80 (or your configured domain).
+The server will be accessible at http://localhost:8080 (or your configured domain).
 
 2. Extension Installation
 Open Chrome and navigate to chrome://extensions.
