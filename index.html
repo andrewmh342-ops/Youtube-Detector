@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Aeroblade Ensemble - Deepfake Analysis</title>
+    <style>
+        body { 
+            font-family: 'Malgun Gothic', sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            background-color: #f0f2f5; 
+            padding: 40px; 
+        }
+        
+        #options-container {
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+            background: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        #options-container select {
+            padding: 8px 12px;
+            font-size: 1rem;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            outline: none;
+            cursor: pointer;
+        }
+
+        #drop-zone {
+            width: 600px; 
+            height: 120px; 
+            border: 3px dashed #007bff; 
+            border-radius: 15px;
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            background-color: white; 
+            cursor: pointer; 
+            font-size: 1.1rem; 
+            font-weight: bold; 
+            margin-bottom: 25px;
+            transition: all 0.3s ease;
+        }
+        
+        #drop-zone.dragover { 
+            background-color: #e3f2fd; 
+            border-color: #0056b3; 
+            transform: scale(1.02);
+        }
+
+        #summary-container {
+            display: none;
+            width: 100%;
+            max-width: 1200px;
+            background-color: #fff3e0;
+            border: 2px solid #ffb74d;
+            color: #e65100;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        
+        #result-container { 
+            width: 100%; 
+            max-width: 1200px; 
+            display: none; 
+            grid-template-columns: repeat(auto-fill, minmax(500px, 1fr)); 
+            gap: 25px; 
+        }
+        
+        .result-card { 
+            background: white; 
+            padding: 25px; 
+            border-radius: 16px; 
+            box-shadow: 0 6px 20px rgba(0,0,0,0.1); 
+            display: flex;
+            flex-direction: column;
+        }
+
+        .comparison-view {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .media-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .preview-media, .heatmap-media {
+            width: 100%;
+            height: 220px;
+            object-fit: contain;
+            background-color: #1a1a1a; 
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+
+        .label-text {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 6px;
+            font-weight: bold;
+        }
+        
+        .file-title {
+            margin-top: 0; 
+            border-bottom: 2px solid #007bff; 
+            padding-bottom: 10px; 
+            color: #333;
+            font-size: 1.1rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .info-row { 
+            display: flex; 
+            justify-content: space-between; 
+            margin: 6px 0; 
+            font-size: 0.9rem; 
+            color: #444; 
+            border-bottom: 1px dashed #eee; 
+            padding-bottom: 4px; 
+        }
+        .info-label { font-weight: bold; color: #555; }
+        
+        .verdict-box { 
+            margin-top: 15px;
+            padding: 12px; 
+            border-radius: 8px; 
+            text-align: center; 
+            font-size: 1.3rem; 
+            font-weight: bold; 
+        }
+        .fake { background-color: #ffebee; color: #d32f2f; border: 1px solid #ffcdd2; }
+        .real { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
+        
+        .reason-text { font-size: 0.85rem; color: #666; margin-top: 12px; line-height: 1.5; background: #f8f9fa; padding: 10px; border-radius: 6px; }
+        #loading { display: none; font-weight: bold; color: #007bff; margin-bottom: 20px; font-size: 1.2rem; }
+        
+        .correct-badge { margin-top: 10px; text-align: center; font-weight: bold; font-size: 1.1rem; color: #2e7d32; background: #e8f5e9; padding: 6px; border-radius: 6px; }
+        .incorrect-badge { margin-top: 10px; text-align: center; font-weight: bold; font-size: 1.1rem; color: #d32f2f; background: #ffebee; padding: 6px; border-radius: 6px; }
+    </style>
+</head>
+<body>
+
+    <h2 style="color: #333; margin-bottom: 10px;">Aeroblade Ensemble: Fake Part Detection</h2>
+    <p style="color: #666; margin-bottom: 30px;">서버로부터 직접 전송받은 데이터를 통해 분석 지점을 확인하세요.</p>
+
+    <div id="options-container">
+        <label for="expected-answer"><strong>테스트 모드:</strong> 실제 정답 설정</label>
+        <select id="expected-answer">
+            <option value="none">모름 (일반 판별)</option>
+            <option value="진짜">전부 '진짜(Original)'</option>
+            <option value="가짜">전부 '가짜(Deepfake)'</option>
+        </select>
+    </div>
+
+    <div id="drop-zone">분석할 파일을 드래그하거나 클릭하여 업로드하세요</div>
+    <input type="file" id="file-input" style="display:none" accept="image/*,video/*" multiple>
+
+    <div id="loading">🚀 AI가 고해상도 지문을 추출 중입니다...</div>
+    
+    <div id="summary-container"></div>
+    <div id="result-container"></div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const resultContainer = document.getElementById('result-container');
+        const summaryContainer = document.getElementById('summary-container');
+        const loading = document.getElementById('loading');
+        const expectedAnswerSelect = document.getElementById('expected-answer');
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragover'); };
+        dropZone.ondragleave = () => { dropZone.classList.remove('dragover'); };
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files); 
+        };
+
+        async function handleFiles(files) {
+            if (files.length === 0) return;
+            
+            resultContainer.innerHTML = "";
+            resultContainer.style.display = "none";
+            summaryContainer.style.display = "none";
+            loading.style.display = "block";
+
+            const formData = new FormData();
+            for (let i = 0; i < files.length; i++) {
+                formData.append('files', files[i]);
+            }
+            formData.append('expected_answer', expectedAnswerSelect.value);
+
+            try {
+                const response = await fetch("/upload", { method: 'POST', body: formData });
+                const responseData = await response.json();
+                displayResults(responseData);
+            } catch (error) {
+                alert("분석 실패: " + error.message);
+            } finally {
+                loading.style.display = "none";
+                fileInput.value = "";
+            }
+        }
+
+        function displayResults(responseData) {
+            const summary = responseData.summary;
+            const dataList = responseData.details;
+
+            if (summary.tested_type !== "none") {
+                summaryContainer.style.display = "block";
+                summaryContainer.innerHTML = `🎯 정확도 테스트 결과: ${summary.total}개 중 ${summary.correct}개 정답 (${summary.accuracy}%)`;
+            }
+
+            resultContainer.style.display = "grid"; 
+            
+            dataList.forEach(data => {
+                const card = document.createElement('div');
+                card.className = 'result-card';
+                
+                const originalSrc = data.original_url; 
+                const heatmapSrc = data.heatmap_url; 
+
+                const isReal = data.result === "진짜";
+                const verdictClass = isReal ? "real" : "fake";
+
+                const reasonMsg = isReal 
+                    ? `전체 오차가 충분히 큽니다. 우측 히트맵에 강조된 붉은 영역이 거의 없는 것은 실제 데이터의 복잡한 노이즈가 유지되고 있음을 의미합니다.`
+                    : `재구성 오차가 임계값보다 낮은 부위가 포착되었습니다. 우측 히트맵에서 <strong>빨갛게 하이라이트된 부분</strong>이 AI 조작 지문이 강하게 남은 곳입니다.`;
+
+                card.innerHTML = `
+                    <h3 class="file-title">${data.filename}</h3>
+                    
+                    <div class="comparison-view">
+                        <div class="media-box">
+                            <img src="${originalSrc}" class="preview-media" onerror="this.src='https://via.placeholder.com/250?text=No+Original'">
+                            <div class="label-text">원본(Original)</div>
+                        </div>
+                        <div class="media-box">
+                            <img src="${heatmapSrc}" class="heatmap-media" onerror="this.src='https://via.placeholder.com/250?text=No+Heatmap'">
+                            <div class="label-text">가짜 부위 추출(Detection)</div>
+                        </div>
+                    </div>
+
+                    <div class="info-row"><span class="info-label">분석 기법</span><span>${data.method}</span></div>
+                    <div class="info-row"><span class="info-label">시각적 복잡도</span><span>${data.complexity}</span></div>
+                    <div class="info-row" style="color:#007bff; font-weight:bold;">
+                        <span class="info-label">LPIPS Error</span><span>${data.score}</span>
+                    </div>
+                    
+                    <div class="verdict-box ${verdictClass}">분석 결과 : ${data.result}</div>
+                    <div class="reason-text">💡 <strong>판단 근거:</strong> ${reasonMsg}</div>
+
+                    ${data.is_correct !== null ? (data.is_correct ? `<div class="correct-badge">✅ 판정 성공</div>` : `<div class="incorrect-badge">❌ 판정 실패</div>`) : ''}
+                `;
+                resultContainer.appendChild(card);
+            });
+        }
+    </script>
+</body>
+</html>

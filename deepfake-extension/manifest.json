@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Deepfake Detector",
+  "version": "1.0",
+  "description": "Deepfake Detector Extension",
+  "background": { "service_worker": "background.js" },
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": [ "*://*/*", "http://deeptector.kro.kr/*" ],
+  "content_scripts": [{
+      "matches": ["*://*/*"],
+      "css": ["style.css"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+  }]
+}
