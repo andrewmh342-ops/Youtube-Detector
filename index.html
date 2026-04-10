@@ -2,180 +2,260 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aeroblade Ensemble - Deepfake Analysis</title>
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
     <style>
+        :root {
+            --primary-color: #007bff;
+            --primary-hover: #0056b3;
+            --bg-gradient: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            --card-bg: rgba(255, 255, 255, 0.9);
+            --fake-bg: #fff5f5;
+            --fake-text: #e03131;
+            --real-bg: #ebfbee;
+            --real-text: #2f9e44;
+        }
+
         body { 
-            font-family: 'Malgun Gothic', sans-serif; 
+            font-family: 'Pretendard', sans-serif; 
             display: flex; 
             flex-direction: column; 
             align-items: center; 
-            background-color: #f0f2f5; 
-            padding: 40px; 
+            background: var(--bg-gradient); 
+            min-height: 100vh;
+            margin: 0;
+            padding: 60px 20px;
+            color: #334155;
         }
         
-        #options-container {
-            margin-bottom: 20px;
+        .header-section {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        h2 { 
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: #1e293b;
+            margin-bottom: 10px;
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            color: #64748b;
             font-size: 1.1rem;
-            background: white;
-            padding: 15px 25px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        #options-container {
+            margin-bottom: 30px;
+            background: var(--card-bg);
+            padding: 18px 30px;
+            border-radius: 50px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
             display: flex;
             align-items: center;
             gap: 15px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
         }
 
         #options-container select {
-            padding: 8px 12px;
-            font-size: 1rem;
-            border-radius: 6px;
-            border: 1px solid #ccc;
+            padding: 8px 16px;
+            border-radius: 20px;
+            border: 1px solid #cbd5e1;
             outline: none;
+            font-weight: 600;
             cursor: pointer;
+            transition: all 0.2s;
         }
 
         #drop-zone {
-            width: 600px; 
-            height: 120px; 
-            border: 3px dashed #007bff; 
-            border-radius: 15px;
+            width: 100%;
+            max-width: 700px; 
+            height: 200px; 
+            border: 3px dashed var(--primary-color); 
+            border-radius: 24px;
             display: flex; 
+            flex-direction: column;
             align-items: center; 
             justify-content: center;
-            background-color: white; 
+            background-color: rgba(255, 255, 255, 0.6); 
             cursor: pointer; 
-            font-size: 1.1rem; 
-            font-weight: bold; 
-            margin-bottom: 25px;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            margin-bottom: 40px;
         }
         
+        #drop-zone:hover { 
+            background-color: white; 
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 123, 255, 0.15);
+        }
+
         #drop-zone.dragover { 
-            background-color: #e3f2fd; 
-            border-color: #0056b3; 
-            transform: scale(1.02);
+            background-color: #e7f3ff; 
+            border-color: var(--primary-hover); 
+        }
+
+        #drop-zone span {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--primary-color);
         }
 
         #summary-container {
             display: none;
             width: 100%;
             max-width: 1200px;
-            background-color: #fff3e0;
-            border: 2px solid #ffb74d;
-            color: #e65100;
+            background: #fff9db;
+            border: 1px solid #fab005;
+            color: #f08c00;
             padding: 20px;
-            border-radius: 12px;
+            border-radius: 16px;
             text-align: center;
-            font-size: 1.5rem;
-            font-weight: bold;
-            margin-bottom: 25px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            font-size: 1.4rem;
+            font-weight: 800;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(240, 140, 0, 0.1);
         }
         
         #result-container { 
             width: 100%; 
             max-width: 1200px; 
             display: none; 
-            grid-template-columns: repeat(auto-fill, minmax(500px, 1fr)); 
-            gap: 25px; 
+            /* 🟢 카드 밀림 현상 해결: 최소 너비를 화면 크기에 맞게 유동적으로 조정 */
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, 450px), 1fr)); 
+            gap: 30px; 
+            box-sizing: border-box;
         }
         
         .result-card { 
             background: white; 
-            padding: 25px; 
-            border-radius: 16px; 
-            box-shadow: 0 6px 20px rgba(0,0,0,0.1); 
-            display: flex;
-            flex-direction: column;
+            padding: 30px; 
+            border-radius: 28px; 
+            box-shadow: 0 15px 35px rgba(0,0,0,0.07); 
+            border: 1px solid #f1f5f9;
+            /* 🟢 카드 튀어 나감 방지 */
+            box-sizing: border-box; 
+            width: 100%;
+        }
+
+        .file-title {
+            margin-top: 0; 
+            font-size: 1.25rem;
+            font-weight: 800;
+            color: #1e293b;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #f1f5f9;
+            margin-bottom: 20px;
         }
 
         .comparison-view {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .media-box {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            gap: 15px;
+            margin-bottom: 25px;
         }
 
         .preview-media, .heatmap-media {
             width: 100%;
-            height: 220px;
-            object-fit: contain;
-            background-color: #1a1a1a; 
-            border-radius: 8px;
-            border: 1px solid #ddd;
+            height: 240px;
+            object-fit: cover;
+            background-color: #0f172a; 
+            border-radius: 16px;
         }
 
         .label-text {
-            font-size: 0.8rem;
-            color: #666;
-            margin-top: 6px;
-            font-weight: bold;
-        }
-        
-        .file-title {
-            margin-top: 0; 
-            border-bottom: 2px solid #007bff; 
-            padding-bottom: 10px; 
-            color: #333;
-            font-size: 1.1rem;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            font-size: 0.85rem;
+            color: #94a3b8;
+            margin-top: 8px;
+            font-weight: 600;
+            text-align: center;
         }
         
         .info-row { 
             display: flex; 
             justify-content: space-between; 
-            margin: 6px 0; 
-            font-size: 0.9rem; 
-            color: #444; 
-            border-bottom: 1px dashed #eee; 
-            padding-bottom: 4px; 
+            margin: 8px 0; 
+            font-size: 0.95rem; 
+            padding-bottom: 6px; 
+            border-bottom: 1px solid #f8fafc;
         }
-        .info-label { font-weight: bold; color: #555; }
+
+        .info-label { font-weight: 600; color: #64748b; }
         
         .verdict-box { 
-            margin-top: 15px;
-            padding: 12px; 
-            border-radius: 8px; 
+            margin-top: 20px;
+            padding: 15px; 
+            border-radius: 14px; 
             text-align: center; 
-            font-size: 1.3rem; 
-            font-weight: bold; 
+            font-size: 1.4rem; 
+            font-weight: 800; 
         }
-        .fake { background-color: #ffebee; color: #d32f2f; border: 1px solid #ffcdd2; }
-        .real { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
+
+        .fake { background-color: var(--fake-bg); color: var(--fake-text); }
+        .real { background-color: var(--real-bg); color: var(--real-text); }
         
-        .reason-text { font-size: 0.85rem; color: #666; margin-top: 12px; line-height: 1.5; background: #f8f9fa; padding: 10px; border-radius: 6px; }
-        #loading { display: none; font-weight: bold; color: #007bff; margin-bottom: 20px; font-size: 1.2rem; }
-        
-        .correct-badge { margin-top: 10px; text-align: center; font-weight: bold; font-size: 1.1rem; color: #2e7d32; background: #e8f5e9; padding: 6px; border-radius: 6px; }
-        .incorrect-badge { margin-top: 10px; text-align: center; font-weight: bold; font-size: 1.1rem; color: #d32f2f; background: #ffebee; padding: 6px; border-radius: 6px; }
+        .reason-text { 
+            font-size: 0.9rem; 
+            color: #475569; 
+            margin-top: 15px; 
+            line-height: 1.6; 
+            background: #f8fafc; 
+            padding: 15px; 
+            border-radius: 12px; 
+        }
+
+        #loading { 
+            display: none; 
+            font-weight: 700; 
+            color: var(--primary-color); 
+            margin-bottom: 20px; 
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+
+        /* 📱 모바일 환경 최적화 추가 (카드 여백 조절) */
+        @media (max-width: 768px) {
+            .result-card {
+                padding: 20px; 
+            }
+            
+            .preview-media, .heatmap-media {
+                height: 180px; 
+            }
+        }
     </style>
 </head>
 <body>
 
-    <h2 style="color: #333; margin-bottom: 10px;">Aeroblade Ensemble: Fake Part Detection</h2>
-    <p style="color: #666; margin-bottom: 30px;">서버로부터 직접 전송받은 데이터를 통해 분석 지점을 확인하세요.</p>
+    <div class="header-section">
+        <h2>Aeroblade Ensemble</h2>
+        <p class="subtitle">AI 기반 고해상도 지문 분석을 통한 Deepfake 탐지 솔루션</p>
+    </div>
 
     <div id="options-container">
-        <label for="expected-answer"><strong>테스트 모드:</strong> 실제 정답 설정</label>
+        <label for="expected-answer"><strong>테스트 모드</strong></label>
         <select id="expected-answer">
-            <option value="none">모름 (일반 판별)</option>
-            <option value="진짜">전부 '진짜(Original)'</option>
-            <option value="가짜">전부 '가짜(Deepfake)'</option>
+            <option value="none">일반 판별 모드</option>
+            <option value="진짜">All Original (진짜)</option>
+            <option value="가짜">All Deepfake (가짜)</option>
         </select>
     </div>
 
-    <div id="drop-zone">분석할 파일을 드래그하거나 클릭하여 업로드하세요</div>
+    <div id="drop-zone">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#007bff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:15px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+        <span>분석할 파일을 드래그하거나 클릭하세요</span>
+    </div>
+
     <input type="file" id="file-input" style="display:none" accept="image/*,video/*" multiple>
 
-    <div id="loading">🚀 AI가 고해상도 지문을 추출 중입니다...</div>
+    <div id="loading">🚀 AI가 픽셀 단위 재구성 오차를 분석 중입니다...</div>
     
     <div id="summary-container"></div>
     <div id="result-container"></div>
@@ -214,11 +294,14 @@
             formData.append('expected_answer', expectedAnswerSelect.value);
 
             try {
+                // 실제 서버 연동 시 /upload 경로 확인 필요
                 const response = await fetch("/upload", { method: 'POST', body: formData });
                 const responseData = await response.json();
                 displayResults(responseData);
             } catch (error) {
-                alert("분석 실패: " + error.message);
+                console.error(error);
+                // 데모용 임시 에러 메시지
+                alert("서버 연결에 실패했습니다. 백엔드가 실행 중인지 확인하세요.");
             } finally {
                 loading.style.display = "none";
                 fileInput.value = "";
@@ -231,7 +314,7 @@
 
             if (summary.tested_type !== "none") {
                 summaryContainer.style.display = "block";
-                summaryContainer.innerHTML = `🎯 정확도 테스트 결과: ${summary.total}개 중 ${summary.correct}개 정답 (${summary.accuracy}%)`;
+                summaryContainer.innerHTML = `🎯 테스트 결과: ${summary.total}개 중 ${summary.correct}개 정답 (${summary.accuracy}%)`;
             }
 
             resultContainer.style.display = "grid"; 
@@ -240,40 +323,31 @@
                 const card = document.createElement('div');
                 card.className = 'result-card';
                 
-                const originalSrc = data.original_url; 
-                const heatmapSrc = data.heatmap_url; 
-
                 const isReal = data.result === "진짜";
                 const verdictClass = isReal ? "real" : "fake";
-
+                let verdictText = isReal ? "Real" : "Fake";
                 const reasonMsg = isReal 
-                    ? `전체 오차가 충분히 큽니다. 우측 히트맵에 강조된 붉은 영역이 거의 없는 것은 실제 데이터의 복잡한 노이즈가 유지되고 있음을 의미합니다.`
-                    : `재구성 오차가 임계값보다 낮은 부위가 포착되었습니다. 우측 히트맵에서 <strong>빨갛게 하이라이트된 부분</strong>이 AI 조작 지문이 강하게 남은 곳입니다.`;
+                    ? `픽셀 재구성 오차가 임계값을 상회합니다. 데이터 전반에 걸쳐 인공적인 압축 흔적이 발견되지 않았습니다.`
+                    : `특정 영역에서 재구성 오차가 급격히 낮아지는 지점이 발견되었습니다. <strong>히트맵의 붉은 영역</strong>이 AI에 의해 조작된 지문입니다.`;
 
                 card.innerHTML = `
                     <h3 class="file-title">${data.filename}</h3>
-                    
                     <div class="comparison-view">
                         <div class="media-box">
-                            <img src="${originalSrc}" class="preview-media" onerror="this.src='https://via.placeholder.com/250?text=No+Original'">
-                            <div class="label-text">원본(Original)</div>
+                            <img src="${data.original_url}" class="preview-media" onerror="this.src='https://via.placeholder.com/300x240/0f172a/ffffff?text=No+Image'">
+                            <div class="label-text">Original</div>
                         </div>
                         <div class="media-box">
-                            <img src="${heatmapSrc}" class="heatmap-media" onerror="this.src='https://via.placeholder.com/250?text=No+Heatmap'">
-                            <div class="label-text">가짜 부위 추출(Detection)</div>
+                            <img src="${data.heatmap_url}" class="heatmap-media" onerror="this.src='https://via.placeholder.com/300x240/0f172a/ffffff?text=Analyzing...'">
+                            <div class="label-text">Heatmap (Artifacts)</div>
                         </div>
                     </div>
-
-                    <div class="info-row"><span class="info-label">분석 기법</span><span>${data.method}</span></div>
-                    <div class="info-row"><span class="info-label">시각적 복잡도</span><span>${data.complexity}</span></div>
-                    <div class="info-row" style="color:#007bff; font-weight:bold;">
-                        <span class="info-label">LPIPS Error</span><span>${data.score}</span>
-                    </div>
-                    
-                    <div class="verdict-box ${verdictClass}">분석 결과 : ${data.result}</div>
-                    <div class="reason-text">💡 <strong>판단 근거:</strong> ${reasonMsg}</div>
-
-                    ${data.is_correct !== null ? (data.is_correct ? `<div class="correct-badge">✅ 판정 성공</div>` : `<div class="incorrect-badge">❌ 판정 실패</div>`) : ''}
+                    <div class="info-row"><span class="info-label">기법</span><span>${data.method}</span></div>
+                    <div class="info-row" style="color:#007bff; font-weight:700;"><span class="info-label">LPIPS Error</span><span>${data.score}</span></div>
+                    <div class="info-row" style=" font-weight:700;"><span class="info-label">LPIPS Threshold</span><span>${data.threshold}</span></div>
+                    <div class="info-row" style="color:#f07a2c; font-weight:700;"><span class="info-label">FIRE Score</span><span>${data.fire_score}</span></div>
+                    <div class="verdict-box ${verdictClass}">${data.result} (${verdictText})</div>
+                    <div class="reason-text">💡 ${reasonMsg}</div>
                 `;
                 resultContainer.appendChild(card);
             });
