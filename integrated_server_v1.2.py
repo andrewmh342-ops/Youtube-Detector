@@ -159,23 +159,14 @@ class IntegratedScanner:
         
         try:
             with Image.open(img_path) as img:
-                # 1. 챗GPT (DALL-E 3) & C2PA 확인
-                # C2PA 데이터는 보통 'JUMBF' 유닛에 저장됩니다.
                 if "XML:com.adobe.xmp" in img.info:
                     xmp_data = img.info["XML:com.adobe.xmp"]
                     if "dalle" in xmp_data.lower() or "openai" in xmp_data.lower():
                         results.update({"is_ai_metadata": True, "source": "DALL-E 3 (OpenAI)", "details": "C2PA/XMP 데이터 감지"})
-
-                # 2. 제미나이 (Google / IPTC 확인)
-                # 구글은 IPTC의 DigitalSourceType 필드에 AI 정보를 기록합니다.
                 iptc = img.info.get("iptc")
                 if iptc:
-                    # 'trainedAlgorithmicMedia' 등의 키워드 확인
                     if b"google" in str(iptc).lower() or b"imagen" in str(iptc).lower():
                         results.update({"is_ai_metadata": True, "source": "Gemini (Google)", "details": "IPTC 디지털 소스 정보 확인"})
-
-                # 3. 그록 (Grok / Flux.1 PNG Info 확인)
-                # Flux 모델은 PNG의 'tEXt' 청크에 프롬프트와 모델 정보를 남기는 경우가 많습니다.
                 if img.format == "PNG":
                     for key, value in img.info.items():
                         if any(word in str(value).lower() for word in ["flux", "grok", "xai"]):
@@ -243,7 +234,6 @@ class IntegratedScanner:
             if not ret: break
             
             pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            # [중요] 변수 8개를 모두 받아야 에러가 나지 않습니다.
             ae, fire, comp, thr, model, orig, heat, _ = self.get_score(pil_img, "video_frame")
             
             ae_list.append(ae); fire_list.append(fire); comp_list.append(comp); thr_list.append(thr)
@@ -254,7 +244,6 @@ class IntegratedScanner:
 
         avg_ae = sum(ae_list)/len(ae_list)
         avg_fire = sum(fire_list)/len(fire_list)
-        # 비디오는 물리적 점수의 평균으로 최종 판정
         verdict = "가짜" if (avg_ae < sum(thr_list)/len(thr_list)) or (avg_fire < 42.0) else "진짜"
         return avg_ae, avg_fire, sum(comp_list)/len(comp_list), sum(thr_list)/len(thr_list), verdict, best_frame_data["orig"], best_frame_data["heat"]
 
