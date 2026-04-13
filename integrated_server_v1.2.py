@@ -309,22 +309,29 @@ async def admin_dashboard():
     
 # 가짜 사이트 등록 API
 @app.post("/report-fake-url")
-async def report_fake_url(url: str = Form(...)):
+async def report_fake_url(url: str = Form(...), user_token: str = Form("anonymous")):
     clean_url = url.strip().rstrip('/')
-    conn = sqlite3.connect("fake_sites.db")
-    cursor = conn.cursor()
-    try:
-        cursor.execute('''
-            INSERT INTO fake_sites (url, detected_at, hit_count) 
-            VALUES (?, ?, 1)
-            ON CONFLICT(url) DO UPDATE SET hit_count = hit_count + 1
-        ''', (clean_url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        conn.commit()
-        return {"status": "success", "url": clean_url}
-    except Exception as e: 
-        return {"status": "error", "message": str(e)}
-    finally: 
-        conn.close()
+    if clean_url.startswith("https://") or clean_url.startswith("http://"):
+        conn = sqlite3.connect("fake_sites.db")
+        cursor = conn.cursor()
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute('''
+                INSERT INTO fake_sites (url, detected_at, hit_count) 
+                VALUES (?, ?, 1)
+                ON CONFLICT(url) DO UPDATE SET 
+                    hit_count = hit_count + 1,
+                    detected_at = ?
+            ''', (clean_url, now, now))
+            conn.commit()
+            return {"status": "success", "url": clean_url}
+        except Exception as e: 
+            return {"status": "error", "message": str(e)}
+        finally: 
+            conn.close()
+    else:
+        return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid URL format"})
+
 
 # 사이트 조회 API
 @app.get("/check-site")
