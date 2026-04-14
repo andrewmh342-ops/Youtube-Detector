@@ -45,18 +45,88 @@
 /* 결과 표시 오버레이 (화면 상단 고정) */
 #sg-result-overlay {
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    padding: 20px;
-    text-align: center;
-    font-weight: bold;
-    font-size: 24px;
-    z-index: 2147483647; /* 최상단 */
-    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-    display: none; /* 기본 숨김 */
+    top: 20px;
+    right: 20px;
+    width: 360px;
+    padding: 24px;
+    border-radius: 24px;
+    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+    z-index: 2147483647;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+    display: none;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    transition: all 0.3s ease;
 }
 
-.sg-real { background-color: #e3f2fd; color: #1976d2; border-bottom: 5px solid #1976d2; }
-.sg-fake { background-color: #ffebee; color: #d32f2f; border-bottom: 5px solid #d32f2f; }
-.sg-loading { background-color: #fff3cd; color: #856404; font-size: 20px; }
+/* --- 신뢰도 게이지 그래픽 스타일 --- */
+.gauge-container {
+    width: 100%;
+    margin: 15px 0 25px 0;
+    position: relative;
+    font-family: 'Malgun Gothic', sans-serif;
+}
+
+/* 게이지 바 배경 */
+.gauge-track {
+    width: 100%;
+    height: 10px;
+    background: linear-gradient(to right, #ff6b6b, #ffe066, #51cf66);
+    border-radius: 5px;
+    position: relative;
+    border: 1px solid rgba(0,0,0,0.05);
+}
+
+/* 임계값 기준선 (마커) */
+.gauge-threshold-line {
+    position: absolute;
+    top: -4px;
+    width: 2px;
+    height: 18px;
+    background-color: #334155;
+    border-radius: 2px;
+    z-index: 2;
+}
+
+/* 임계값 글씨 (Threshold) */
+.gauge-threshold-text {
+    position: absolute;
+    top: 16px;
+    font-size: 10px;
+    font-weight: bold;
+    color: #64748b;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+/* 현재 점수 포인터 (움직이는 원) */
+.gauge-point {
+    position: absolute;
+    top: -5px;
+    width: 16px;
+    height: 16px;
+    background-color: #007bff;
+    border: 2px solid white;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    z-index: 3;
+    transition: left 0.5s ease-out;
+}
+
+/* 진짜 이미지 테마 */
+.sg-real { 
+    background-color: rgba(235, 251, 238, 0.95) !important; 
+    color: #2f9e44 !important; 
+}
+
+/* 가짜 이미지 테마 */
+.sg-fake { 
+    background-color: rgba(255, 245, 245, 0.95) !important; 
+    color: #e03131 !important; 
+}
+
+/* 분석 중(Loading) 테마 */
+.sg-loading { 
+    background-color: rgba(255, 249, 219, 0.95) !important; 
+    color: #f08c00 !important; 
+}

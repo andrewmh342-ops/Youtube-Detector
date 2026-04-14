@@ -10,10 +10,8 @@ let currentTargetImg = null;
 
 // AI 조작 이미지 탐지에 활용할 키워드 목록 (유튜브 라벨, 유명 AI 모델, 제작 도구, 제작자 관행 등)
 const CUSTOM_AI_KEYWORDS = [
-    "AI", "aiart", "aiasmr", "deepfake", "sora", "Altered or synthetic content", "수정되었거나 가상으로 생성된 콘텐츠", 
-    "AI 제작", "변경되었거나 합성된 콘텐츠", "AI 기술 활용", "Sora", "Midjourney", "Stable Diffusion", "DALL-E", 
-    "Runway Gen", "Pika Labs", "Luma Dream Machine", "Flux.1", "Deepfake", "AI Generated", "AI-assisted", 
-    "Generative AI", "인공지능 생성", "합성 영상", "AI 페이스", "Face Swap","Made with AI", "Prompt by", "AI-powered", "Created using AI"
+    "수정되었거나 가상으로 생성된 콘텐츠", "변경되었거나 합성된 콘텐츠",
+    "Altered or Synthetic Content", "AI-generated/AI-modified content", "Altered or Synthetic Content: AI-generated"
 ];
 
 
@@ -77,26 +75,48 @@ function checkYouTubeAITags() {
     const titleElement = document.querySelector("h1.ytd-watch-metadata");
     const descriptionElement = document.querySelector("#description-inline-expander") || 
                                document.querySelector("#description-inner");
+    
+    // 유튜브 공식 AI 라벨이 들어가는 특수 컴포넌트 영역
+    const aiLabelElement = document.querySelector('ytd-video-description-infocards-section-renderer') || 
+                           document.querySelector('yt-formatted-string[path="video_info.metadata.info_row.contents"]');
+    
     const metaDescription = document.querySelector('meta[name="description"]')?.content || "";
 
-    if (!titleElement && !descriptionElement && !metaDescription) {
+    if (!titleElement && !descriptionElement && !metaDescription && !aiLabelElement) {
         console.log("로딩 중... 1.5초 뒤 재시도");
         setTimeout(checkYouTubeAITags, 1500);
         return;
     }
-    const combinedText = (titleElement?.textContent || "") + " " + 
-                         (descriptionElement?.textContent || "") + " " + 
-                         metaDescription;
+
+    const combinedText = [
+        titleElement?.textContent,
+        descriptionElement?.textContent,
+        aiLabelElement?.textContent,
+        metaDescription
+    ].join(" ");
+
+    console.log(`[Deeptector] 분석 텍스트 길이: ${combinedText.length}`);
 
     const detectedKeyword = CUSTOM_AI_KEYWORDS.find(keyword => {
-        const regex = new RegExp(`(#|\\b)${keyword}`, 'i');
-        return regex.test(combinedText);
+        if (keyword.length > 5) {
+            return combinedText.toLowerCase().includes(keyword.toLowerCase());
+        } else {
+            const regex = new RegExp(`(#|\\b)${keyword}`, 'i');
+            return regex.test(combinedText);
+        }
     });
 
     if (detectedKeyword) {
         console.log(`✅ 탐지 성공: ${detectedKeyword}`);
-        showOverlay(`⚠️ 유튜브 영상 태그에 AI 키워드가 감지되었습니다! \n ▶ 감지된 키워드: ${detectedKeyword}`, "fake");
-        if (typeof hideOverlay === 'function') setTimeout(hideOverlay, 5000);
+        
+        showOverlay("플랫폼 공식 라벨 탐지", "fake", {
+            isMetadata: true,
+            keyword: detectedKeyword,
+            result: "가짜 (AI 생성)",
+            method: "YouTube Metadata 스캔"
+        });
+        
+        if (typeof hideOverlay === 'function') setTimeout(hideOverlay, 6000);
     } else {
         console.log("[Deeptector] ❌ AI 키워드를 찾지 못했습니다.");
     }
@@ -105,7 +125,7 @@ function checkYouTubeAITags() {
 // 서버로 이미지 데이터 전달 (Background 경유)
 async function sendToServer(blob, filename) {
     // 분석 시작 알림 표시
-    showOverlay("🛡️ AI 모델이 분석 중입니다... 잠시만 기다려주세요.", "loading");
+    showOverlay("🛡️ AI 모델이 분석 중입니다... <br> &nbsp;&nbsp;&nbsp;&nbsp; 잠시만 기다려주세요.", "loading");
 
     // Blob 데이터를 Background Service Worker로 전달하기 위한 임시 URL 생성
     const blobUrl = URL.createObjectURL(blob);
@@ -120,37 +140,29 @@ async function sendToServer(blob, filename) {
         URL.revokeObjectURL(blobUrl);
 
         if (response && response.success) {
-            // 서버 응답 구조에 맞게 데이터 추출
+            // 서버 응답에서 데이터 추출
             const data = response.data.details[0]; 
             const isFake = data.result.trim().includes("가짜");
             
             console.log("분석 완료 - 결과:", data.result, "가짜 여부:", isFake);
 
-            // 가짜로 판명된 경우 자동으로 현재 사이트 URL 리포트
+            // 가짜로 판명된 경우 자동으로 현재 사이트 URL 리포트 로직 실행
             if (isFake) {
                 const currentDomain = window.location.href;
                 console.log("가짜 판정 확인: 서버 DB에 사이트 등록을 요청합니다.");
                 chrome.runtime.sendMessage({ 
                     action: "report_url", 
-                    url: currentDomain // 도메인 주소 전송
+                    url: currentDomain 
                 });
             }
 
-            // 결과 화면 출력 (점수 및 기준값 포함)
-            const score = data.score.toFixed(4);
-            const threshold = data.threshold ? data.threshold.toFixed(4) : "0.0500";
-            const method = data.method || "AEROBLADE Ensemble";
-
-            let resultMsg = "";
-            if (isFake) {
-                resultMsg = `⚠️ 위험! 조작된 가짜(AI 생성)일 확률이 높습니다!\n\n▶ 분석 방식: ${method}\n▶ 측정 점수: ${score} (기준값 ${threshold} 미만)`;
-            } else {
-                resultMsg = `✅ 안전! 조작되지 않은 진짜로 보입니다.\n\n▶ 분석 방식: ${method}\n▶ 측정 점수: ${score} (기준값 ${threshold} 이상)`;
-            }
-
-            showOverlay(resultMsg, isFake ? "fake" : "real");
+            // 상단 메시지 구성
+            let resultMsg = isFake 
+                ? `⚠️ 위험! 조작된 가짜일 확률이 높습니다.`
+                : `✅ 안전! 조작되지 않은 진짜로 보입니다.`;
+            showOverlay(resultMsg, isFake ? "fake" : "real", data);
             
-            // 정보가 많으므로 7초간 충분히 노출
+            // 7초간 노출
             setTimeout(hideOverlay, 7000);
 
         } else {
@@ -225,35 +237,81 @@ async function analyzeImageUrl(url) {
     }
 }
 
-function showOverlay(text, type) {
+function showOverlay(text, type, data = null) {
     let overlay = document.getElementById('sg-result-overlay');
     if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'sg-result-overlay';
-        overlay.style.cssText = `
-            position: fixed; top: 30px; right: 30px; z-index: 999999;
-            padding: 20px; border-radius: 12px; font-weight: bold;
-            white-space: pre-line; box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-            min-width: 320px; line-height: 1.6; pointer-events: none;
-            font-size: 15px; border: 2px solid rgba(0,0,0,0.1);
-            font-family: 'Malgun Gothic', sans-serif;
-        `;
         document.body.appendChild(overlay);
     }
     
-    // 타입별 색상 테마 설정
-    const themes = {
-        loading: { bg: '#fff9db', text: '#856404', border: '#ffeeba' },
-        fake: { bg: '#fff5f5', text: '#c92a2a', border: '#ffa8a8' },
-        real: { bg: '#ebfbee', text: '#2b8a3e', border: '#b2f2bb' }
-    };
-    
-    const theme = themes[type] || themes.loading;
-    overlay.style.backgroundColor = theme.bg;
-    overlay.style.color = theme.text;
-    overlay.style.borderColor = theme.border;
-    overlay.innerText = text; // 텍스트만 출력
+    overlay.className = `sg-${type}`;
     overlay.style.display = 'block';
+
+    if (type === 'loading' || !data) {
+        overlay.innerHTML = `<div style="font-size: 16px; font-weight: 800; padding: 10px;">${text}</div>`;
+        return;
+    }
+
+    if (data.isMetadata) {
+        overlay.innerHTML = `
+            <div style="font-size: 13px; color: #64748b; font-weight: 700; margin-bottom: 8px; text-align: left;">🛡️ Deeptector 보안 알림</div>
+            <div style="font-size: 24px; font-weight: 800; margin-bottom: 12px; text-align: left; color: #e03131;">가짜 (AI 생성)</div>
+            
+            <div style="background: rgba(224, 49, 49, 0.1); padding: 15px; border-radius: 16px; margin-bottom: 15px; text-align: left;">
+                <div style="font-size: 11px; color: #e03131; font-weight: 800; text-transform: uppercase; margin-bottom: 4px;">Detected Label</div>
+                <div style="font-size: 16px; font-weight: 800; color: #e03131;">"${data.keyword}"</div>
+            </div>
+
+            <div style="font-size: 12px; line-height: 1.6; background: rgba(255,255,255,0.6); padding: 12px; border-radius: 14px; text-align: left; color: #475569;">
+                💡 <strong>분석 결과:</strong> 유튜브 설명란에서 AI 제작물임을 명시하는 공식 라벨이 발견되었습니다. 물리적 분석 없이도 신뢰할 수 없는 콘텐츠로 분류됩니다.
+            </div>
+        `;
+    } 
+
+    else {
+        const FIRE_THR = 42.0;
+        const isFireFake = data.fire_score < FIRE_THR;
+        const isAeFake = data.score < data.threshold;
+        let displayVal, displayThr, maxVal, gaugeTitle;
+
+        if (isFireFake && !isAeFake) {
+            displayVal = data.fire_score; displayThr = FIRE_THR; maxVal = 80; gaugeTitle = "FIRE Score (주파수 분석)";
+        } else {
+            displayVal = data.score; displayThr = data.threshold; maxVal = 0.15; gaugeTitle = "AEROBLADE (재구성 오차)";
+        }
+
+        const thrLabel = displayThr < 1 ? displayThr.toFixed(4) : displayThr.toFixed(1);
+
+        overlay.innerHTML = `
+            <div style="font-size: 13px; color: #64748b; font-weight: 700; margin-bottom: 8px; text-align: left;">🔍 분석 완료</div>
+            <div style="font-size: 24px; font-weight: 800; margin-bottom: 15px; text-align: left;">${data.result}</div>
+            
+            <div class="gauge-container">
+                <div style="font-size: 11px; color: #64748b; margin-bottom: 5px; font-weight: bold; text-align: left;">📊 ${gaugeTitle}</div>
+                <div class="gauge-track">
+                    <div class="gauge-threshold-line" id="sg-thr-line"></div>
+                    <div class="gauge-threshold-text" id="sg-thr-text">Threshold: ${thrLabel}</div>
+                    <div class="gauge-point" id="sg-gauge-point"></div>
+                </div>
+            </div>
+
+            <div style="font-size: 12px; line-height: 1.6; background: rgba(255,255,255,0.6); padding: 12px; border-radius: 14px; text-align: left; color: #475569;">
+                💡 <strong>판단 근거:</strong> ${text.includes('\n') ? text.split('\n\n')[1] : text}
+            </div>
+        `;
+
+        setTimeout(() => {
+            const thrPercent = Math.min(100, (displayThr / maxVal) * 100);
+            const scorePercent = Math.min(100, (displayVal / maxVal) * 100);
+            const thrLine = document.getElementById('sg-thr-line');
+            const thrText = document.getElementById('sg-thr-text');
+            const point = document.getElementById('sg-gauge-point');
+            if (thrLine) thrLine.style.left = `${thrPercent}%`;
+            if (thrText) thrText.style.left = `${thrPercent}%`;
+            if (point) point.style.left = `calc(${scorePercent}% - 8px)`;
+        }, 100);
+    }
 }
 
 function hideOverlay() {

@@ -123,7 +123,6 @@
             width: 100%; 
             max-width: 1200px; 
             display: none; 
-            /* 🟢 카드 밀림 현상 해결: 최소 너비를 화면 크기에 맞게 유동적으로 조정 */
             grid-template-columns: repeat(auto-fill, minmax(min(100%, 450px), 1fr)); 
             gap: 30px; 
             box-sizing: border-box;
@@ -179,7 +178,55 @@
             margin: 8px 0; 
             font-size: 0.95rem; 
             padding-bottom: 6px; 
-            border-bottom: 1px solid #f8fafc;
+            border-bottom: 1px solid #eff0f1;
+        }
+        .gauge-container {
+            width: 100%;
+            margin: 15px 0 30px 0;
+            position: relative;
+            font-family: 'Malgun Gothic', sans-serif;
+        }
+
+        .gauge-track {
+            width: 100%;
+            height: 12px;
+            background: linear-gradient(to right, #ff6b6b, #ffe066, #51cf66);
+            border-radius: 6px;
+            position: relative;
+            border: 1px solid rgba(0,0,0,0.05);
+        }
+
+        .gauge-threshold-line {
+            position: absolute;
+            top: -5px;
+            width: 3px;
+            height: 22px;
+            background-color: #343a40;
+            border-radius: 2px;
+            z-index: 2;
+        }
+
+        .gauge-threshold-text {
+            position: absolute;
+            top: 20px;
+            font-size: 11px;
+            font-weight: bold;
+            color: #64748b;
+            transform: translateX(-50%);
+            white-space: nowrap;
+        }
+
+        .gauge-point {
+            position: absolute;
+            top: -7px;
+            width: 20px;
+            height: 20px;
+            background-color: #007bff;
+            border: 3px solid white;
+            border-radius: 50%;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            z-index: 3;
+            transition: left 0.5s ease-out;
         }
 
         .info-label { font-weight: 600; color: #64748b; }
@@ -318,6 +365,7 @@
             }
 
             resultContainer.style.display = "grid"; 
+            resultContainer.innerHTML = "";
             
             dataList.forEach(data => {
                 const card = document.createElement('div');
@@ -326,9 +374,32 @@
                 const isReal = data.result === "진짜";
                 const verdictClass = isReal ? "real" : "fake";
                 let verdictText = isReal ? "Real" : "Fake";
+                
+                let displayVal, displayThr, maxVal, gaugeTitle, unit;
+                const FIRE_THR = 42.0;
+
+                const isFireFake = data.fire_score < FIRE_THR;
+                const isAeFake = data.score < data.threshold;
+
+                if (isFireFake && !isAeFake) {
+                    displayVal = data.fire_score;
+                    displayThr = FIRE_THR;
+                    maxVal = 80; 
+                    gaugeTitle = "FIRE Score (주파수 분석)";
+                    unit = "";
+                } else {
+                    displayVal = data.score;
+                    displayThr = data.threshold;
+                    maxVal = 0.15; 
+                    gaugeTitle = "AEROBLADE (재구성 오차)";
+                    unit = ""; 
+                }
+
+                const thrLabel = displayThr < 1 ? displayThr.toFixed(4) : displayThr.toFixed(1);
+
                 const reasonMsg = isReal 
-                    ? `픽셀 재구성 오차가 임계값을 상회합니다. 데이터 전반에 걸쳐 인공적인 압축 흔적이 발견되지 않았습니다.`
-                    : `특정 영역에서 재구성 오차가 급격히 낮아지는 지점이 발견되었습니다. <strong>히트맵의 붉은 영역</strong>이 AI에 의해 조작된 지문입니다.`;
+                    ? `픽셀 재구성 오차와 주파수 지문이 모두 정상 범위입니다. 인공적인 조작 흔적이 발견되지 않았습니다.`
+                    : `<strong>${gaugeTitle}</strong> 지표에서 이상 수치가 발견되었습니다. 히트맵의 붉은 영역은 AI가 재구성에 성공한 부위입니다.`;
 
                 card.innerHTML = `
                     <h3 class="file-title">${data.filename}</h3>
@@ -342,14 +413,35 @@
                             <div class="label-text">Heatmap (Artifacts)</div>
                         </div>
                     </div>
-                    <div class="info-row"><span class="info-label">기법</span><span>${data.method}</span></div>
                     <div class="info-row" style="color:#007bff; font-weight:700;"><span class="info-label">LPIPS Error</span><span>${data.score}</span></div>
-                    <div class="info-row" style=" font-weight:700;"><span class="info-label">LPIPS Threshold</span><span>${data.threshold}</span></div>
                     <div class="info-row" style="color:#f07a2c; font-weight:700;"><span class="info-label">FIRE Score</span><span>${data.fire_score}</span></div>
+
+                    <div class="gauge-container">
+                        <div style="font-size: 11px; color: #64748b; margin-bottom: 5px; font-weight: bold;">📊 ${gaugeTitle}</div>
+                        <div class="gauge-track">
+                            <div class="gauge-threshold-line" id="thr-line-${data.filename}"></div>
+                            <div class="gauge-threshold-text" id="thr-text-${data.filename}">기준값: ${thrLabel}</div>
+                            <div class="gauge-point" id="point-${data.filename}"></div>
+                        </div>
+                    </div>
+
                     <div class="verdict-box ${verdictClass}">${data.result} (${verdictText})</div>
                     <div class="reason-text">💡 ${reasonMsg}</div>
                 `;
                 resultContainer.appendChild(card);
+
+                const thrPercent = Math.min(100, (displayThr / maxVal) * 100);
+                const scorePercent = Math.min(100, (displayVal / maxVal) * 100);
+
+                setTimeout(() => {
+                    const thrLine = document.getElementById(`thr-line-${data.filename}`);
+                    const thrText = document.getElementById(`thr-text-${data.filename}`);
+                    const point = document.getElementById(`point-${data.filename}`);
+
+                    if (thrLine) thrLine.style.left = `${thrPercent}%`;
+                    if (thrText) thrText.style.left = `${thrPercent}%`;
+                    if (point) point.style.left = `calc(${scorePercent}% - 10px)`;
+                }, 50);
             });
         }
     </script>
