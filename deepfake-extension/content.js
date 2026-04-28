@@ -2,17 +2,22 @@
  * Aeroblade 탐지 시스템
  * Google Chrome Extension Content Script
  */
+
 // [설정 영역]
 const SERVER_URL = "http://deeptector.kro.kr";
 const BASE_URL = `${SERVER_URL}/upload`;
 let floatingBtn = null;
 let currentTargetImg = null;
 
-// AI 조작 이미지 탐지에 활용할 키워드 목록 (유튜브 라벨, 유명 AI 모델, 제작 도구, 제작자 관행 등)
+// AI 조작 이미지 탐지에 활용할 키워드 목록
 const CUSTOM_AI_KEYWORDS = [
     "수정되었거나 가상으로 생성된 콘텐츠", "변경되었거나 합성된 콘텐츠",
     "Altered or Synthetic Content", "AI-generated/AI-modified content", "Altered or Synthetic Content: AI-generated"
 ];
+
+function getNormalizedSiteUrl() {
+    return window.location.origin.replace(/\/$/, "");
+}
 
 
 // [초기화 영역]
@@ -20,7 +25,6 @@ function createFloatingButton() {
     floatingBtn = document.createElement('div');
     floatingBtn.id = 'sg-floating-btn';
     floatingBtn.innerHTML = '🔍';
-    // 기본적인 플로팅 버튼 스타일
     floatingBtn.style.cssText = `
         position: absolute; width: 40px; height: 40px; 
         background: #007bff; color: white; border-radius: 50%;
@@ -38,29 +42,18 @@ function createFloatingButton() {
     });
 }
 
-// 초기화 영역
-checkCurrentSite();
-createFloatingButton(); //
+// 초기화
+createFloatingButton();
 checkYouTubeAITags();
 
-// 페이지 접속 시 위험 사이트 확인
-async function checkCurrentSite() {
-    const currentFullUrl = window.location.href; 
-    chrome.runtime.sendMessage({ action: "check_site", url: currentFullUrl }, (data) => {
+(function initSiteCheck() {
+    const siteUrl = getNormalizedSiteUrl();
+    chrome.runtime.sendMessage({ action: "check_site", url: siteUrl }, (data) => {
         if (data && data.is_blacklisted) {
-            showOverlay(`⚠️ 알림: 이 페이지(${currentFullUrl})는 가짜 이미지가 탐지된 기록이 있습니다!`, "fake");
-            setTimeout(hideOverlay, 10000);
-        }
-    });
-}
-// [자동 실행] 페이지 로드 즉시 서버에 해당 사이트가 DB에 있는지 확인
-(function init() {
-    const currentSite = window.location.origin;
-    chrome.runtime.sendMessage({ action: "check_site", url: currentSite }, (data) => {
-        if (data && data.is_blacklisted) {
-            // DB에 등록된 사이트라면 알림 표시 (10초간 노출)
-            showOverlay(`⚠️ 알림: 이 사이트(${currentSite})는 AI 조작 이미지가 탐지된 기록이 있습니다. 주의하세요!`, "fake");
-            // 자동 알림이므로 10초간 충분히 노출
+            showOverlay(
+                `⚠️ 알림: 이 사이트(${siteUrl})는 AI 조작 이미지가 탐지된 기록이 있습니다. 주의하세요!`,
+                "fake"
+            );
             setTimeout(hideOverlay, 10000);
         }
     });
@@ -72,15 +65,12 @@ function checkYouTubeAITags() {
 
     if (!window.location.href.includes("youtube.com/watch")) return;
 
-    const titleElement = document.querySelector("h1.ytd-watch-metadata");
-    const descriptionElement = document.querySelector("#description-inline-expander") || 
+    const titleElement       = document.querySelector("h1.ytd-watch-metadata");
+    const descriptionElement = document.querySelector("#description-inline-expander") ||
                                document.querySelector("#description-inner");
-    
-    // 유튜브 공식 AI 라벨이 들어가는 특수 컴포넌트 영역
-    const aiLabelElement = document.querySelector('ytd-video-description-infocards-section-renderer') || 
-                           document.querySelector('yt-formatted-string[path="video_info.metadata.info_row.contents"]');
-    
-    const metaDescription = document.querySelector('meta[name="description"]')?.content || "";
+    const aiLabelElement     = document.querySelector('ytd-video-description-infocards-section-renderer') ||
+                               document.querySelector('yt-formatted-string[path="video_info.metadata.info_row.contents"]');
+    const metaDescription    = document.querySelector('meta[name="description"]')?.content || "";
 
     if (!titleElement && !descriptionElement && !metaDescription && !aiLabelElement) {
         console.log("로딩 중... 1.5초 뒤 재시도");
@@ -108,15 +98,13 @@ function checkYouTubeAITags() {
 
     if (detectedKeyword) {
         console.log(`✅ 탐지 성공: ${detectedKeyword}`);
-        
         showOverlay("플랫폼 공식 라벨 탐지", "fake", {
             isMetadata: true,
             keyword: detectedKeyword,
             result: "가짜 (AI 생성)",
             method: "YouTube Metadata 스캔"
         });
-        
-        if (typeof hideOverlay === 'function') setTimeout(hideOverlay, 6000);
+        setTimeout(hideOverlay, 6000);
     } else {
         console.log("[Deeptector] ❌ AI 키워드를 찾지 못했습니다.");
     }
@@ -124,49 +112,36 @@ function checkYouTubeAITags() {
 
 // 서버로 이미지 데이터 전달 (Background 경유)
 async function sendToServer(blob, filename) {
-    // 분석 시작 알림 표시
     showOverlay("🛡️ AI 모델이 분석 중입니다... <br> &nbsp;&nbsp;&nbsp;&nbsp; 잠시만 기다려주세요.", "loading");
 
-    // Blob 데이터를 Background Service Worker로 전달하기 위한 임시 URL 생성
     const blobUrl = URL.createObjectURL(blob);
 
-    // Background Script를 background.js에 메시지 전송
     chrome.runtime.sendMessage({
         action: "upload_image",
         blobUrl: blobUrl,
         filename: filename
     }, (response) => {
-        // 임시 URL 메모리 해제
         URL.revokeObjectURL(blobUrl);
 
         if (response && response.success) {
-            // 서버 응답에서 데이터 추출
-            const data = response.data.details[0]; 
+            const data = response.data.details[0];
             const isFake = data.result.trim().includes("가짜");
-            
+
             console.log("분석 완료 - 결과:", data.result, "가짜 여부:", isFake);
 
-            // 가짜로 판명된 경우 자동으로 현재 사이트 URL 리포트 로직 실행
             if (isFake) {
-                const currentDomain = window.location.href;
+                const siteUrl = getNormalizedSiteUrl();
                 console.log("가짜 판정 확인: 서버 DB에 사이트 등록을 요청합니다.");
-                chrome.runtime.sendMessage({ 
-                    action: "report_url", 
-                    url: currentDomain 
-                });
+                chrome.runtime.sendMessage({ action: "report_url", url: siteUrl });
             }
 
-            // 상단 메시지 구성
-            let resultMsg = isFake 
+            let resultMsg = isFake
                 ? `⚠️ 위험! 조작된 가짜일 확률이 높습니다.`
                 : `✅ 안전! 조작되지 않은 진짜로 보입니다.`;
             showOverlay(resultMsg, isFake ? "fake" : "real", data);
-            
-            // 7초간 노출
             setTimeout(hideOverlay, 7000);
 
         } else {
-            // 에러 처리: 서버가 꺼져있거나 네트워크 문제인 경우
             console.error("서버 통신 에러:", response ? response.error : "Unknown Error");
             showOverlay("❌ 서버 연결 실패! 백엔드 서버가 실행 중인지 확인하세요.", "fake");
             setTimeout(hideOverlay, 3000);
@@ -183,20 +158,20 @@ function injectYouTubeButton() {
     btn.id = 'sg-yt-button';
     btn.innerHTML = '🛡️ 이 영상 가짜인지 검사하기';
     btn.style.cssText = `
-        background: #065fd4; color: white; border: none; 
+        background: #065fd4; color: white; border: none;
         padding: 10px 15px; border-radius: 18px; font-weight: bold;
         cursor: pointer; margin-left: 10px; font-size: 14px;
     `;
 
-    const targetArea = document.querySelector('#top-row, #owner'); 
+    const targetArea = document.querySelector('#top-row, #owner');
     if (targetArea) {
         targetArea.parentElement.insertBefore(btn, targetArea.nextSibling);
         btn.onclick = async () => {
             const video = document.querySelector('video');
             if (!video) { alert("영상을 찾을 수 없습니다."); return; }
-            
+
             const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth || 1280;
+            canvas.width  = video.videoWidth  || 1280;
             canvas.height = video.videoHeight || 720;
             canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
 
@@ -206,7 +181,7 @@ function injectYouTubeButton() {
         };
     }
 }
-// 유튜브 페이지 이동 시 대응을 위해 반복 실행
+
 setInterval(injectYouTubeButton, 2000);
 
 // 이미지 위 돋보기 노출
@@ -215,8 +190,8 @@ document.addEventListener('mouseover', (e) => {
     if (target.tagName === 'IMG' && target.width > 100 && target.height > 100) {
         currentTargetImg = target;
         const rect = target.getBoundingClientRect();
-        floatingBtn.style.top = `${window.scrollY + rect.bottom - 60}px`;
-        floatingBtn.style.left = `${window.scrollX + rect.right - 60}px`;
+        floatingBtn.style.top  = `${window.scrollY + rect.bottom - 60}px`;
+        floatingBtn.style.left = `${window.scrollX + rect.right  - 60}px`;
         floatingBtn.style.display = 'flex';
     } else if (target.id !== 'sg-floating-btn') {
         floatingBtn.style.display = 'none';
@@ -244,7 +219,7 @@ function showOverlay(text, type, data = null) {
         overlay.id = 'sg-result-overlay';
         document.body.appendChild(overlay);
     }
-    
+
     overlay.className = `sg-${type}`;
     overlay.style.display = 'block';
 
@@ -257,22 +232,18 @@ function showOverlay(text, type, data = null) {
         overlay.innerHTML = `
             <div style="font-size: 13px; color: #64748b; font-weight: 700; margin-bottom: 8px; text-align: left;">🛡️ Deeptector 보안 알림</div>
             <div style="font-size: 24px; font-weight: 800; margin-bottom: 12px; text-align: left; color: #e03131;">가짜 (AI 생성)</div>
-            
             <div style="background: rgba(224, 49, 49, 0.1); padding: 15px; border-radius: 16px; margin-bottom: 15px; text-align: left;">
                 <div style="font-size: 11px; color: #e03131; font-weight: 800; text-transform: uppercase; margin-bottom: 4px;">Detected Label</div>
                 <div style="font-size: 16px; font-weight: 800; color: #e03131;">"${data.keyword}"</div>
             </div>
-
             <div style="font-size: 12px; line-height: 1.6; background: rgba(255,255,255,0.6); padding: 12px; border-radius: 14px; text-align: left; color: #475569;">
                 💡 <strong>분석 결과:</strong> 유튜브 설명란에서 AI 제작물임을 명시하는 공식 라벨이 발견되었습니다. 물리적 분석 없이도 신뢰할 수 없는 콘텐츠로 분류됩니다.
             </div>
         `;
-    } 
-
-    else {
+    } else {
         const FIRE_THR = 42.0;
         const isFireFake = data.fire_score < FIRE_THR;
-        const isAeFake = data.score < data.threshold;
+        const isAeFake   = data.score < data.threshold;
         let displayVal, displayThr, maxVal, gaugeTitle;
 
         if (isFireFake && !isAeFake) {
@@ -286,7 +257,6 @@ function showOverlay(text, type, data = null) {
         overlay.innerHTML = `
             <div style="font-size: 13px; color: #64748b; font-weight: 700; margin-bottom: 8px; text-align: left;">🔍 분석 완료</div>
             <div style="font-size: 24px; font-weight: 800; margin-bottom: 15px; text-align: left;">${data.result}</div>
-            
             <div class="gauge-container">
                 <div style="font-size: 11px; color: #64748b; margin-bottom: 5px; font-weight: bold; text-align: left;">📊 ${gaugeTitle}</div>
                 <div class="gauge-track">
@@ -295,21 +265,20 @@ function showOverlay(text, type, data = null) {
                     <div class="gauge-point" id="sg-gauge-point"></div>
                 </div>
             </div>
-
             <div style="font-size: 12px; line-height: 1.6; background: rgba(255,255,255,0.6); padding: 12px; border-radius: 14px; text-align: left; color: #475569;">
                 💡 <strong>판단 근거:</strong> ${text.includes('\n') ? text.split('\n\n')[1] : text}
             </div>
         `;
 
         setTimeout(() => {
-            const thrPercent = Math.min(100, (displayThr / maxVal) * 100);
+            const thrPercent   = Math.min(100, (displayThr / maxVal) * 100);
             const scorePercent = Math.min(100, (displayVal / maxVal) * 100);
-            const thrLine = document.getElementById('sg-thr-line');
-            const thrText = document.getElementById('sg-thr-text');
-            const point = document.getElementById('sg-gauge-point');
-            if (thrLine) thrLine.style.left = `${thrPercent}%`;
-            if (thrText) thrText.style.left = `${thrPercent}%`;
-            if (point) point.style.left = `calc(${scorePercent}% - 8px)`;
+            const thrLine  = document.getElementById('sg-thr-line');
+            const thrText  = document.getElementById('sg-thr-text');
+            const point    = document.getElementById('sg-gauge-point');
+            if (thrLine)  thrLine.style.left  = `${thrPercent}%`;
+            if (thrText)  thrText.style.left  = `${thrPercent}%`;
+            if (point)    point.style.left    = `calc(${scorePercent}% - 8px)`;
         }, 100);
     }
 }
@@ -319,23 +288,21 @@ function hideOverlay() {
     if (overlay) overlay.style.display = 'none';
 }
 
-const observer = new MutationObserver((mutations) => {
-    detectYouTubeAITag();
-});
-
-const target = document.querySelector("#description");
-if (target) {
-    observer.observe(target, { childList: true, subtree: true });
+const descTarget = document.querySelector("#description");
+if (descTarget) {
+    const observer = new MutationObserver(() => {
+        checkYouTubeAITags();
+    });
+    observer.observe(descTarget, { childList: true, subtree: true });
 }
 
 window.addEventListener("yt-navigate-finish", () => {
-    setTimeout(checkYouTubeAITags, 1500); 
-    // 설명란 영역이 동적으로 변할 때를 위해 감시 시작
-    const target = document.querySelector("#description") || document.querySelector("#columns");
-    if (target) {
+    setTimeout(checkYouTubeAITags, 1500);
+    const navTarget = document.querySelector("#description") || document.querySelector("#columns");
+    if (navTarget) {
         const observer = new MutationObserver(() => {
             checkYouTubeAITags();
         });
-        observer.observe(target, { childList: true, subtree: true });
+        observer.observe(navTarget, { childList: true, subtree: true });
     }
 });

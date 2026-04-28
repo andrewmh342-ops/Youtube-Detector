@@ -1,5 +1,8 @@
 import os
+import io
 import math
+import uuid
+import magic
 import torch
 import pandas as pd
 import numpy as np
@@ -20,9 +23,10 @@ import uvicorn
 import shutil
 import base64
 import time
+from pathlib import Path
 from typing import List
 
-# ================= 1. 설정 및 경로 =================
+# ================= 설정 및 경로 =================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MODEL_DIR = "local_models"
 UPLOAD_DIR = "uploads"
@@ -35,6 +39,86 @@ set_port = 8080
 
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
+
+# ================= 파일 업로드 제한 =================
+MAX_FILE_SIZE   = 50 * 1024 * 1024   # 파일 1개당 최대 50MB
+MAX_FILES       = 50                  # 요청당 최대 파일 개수
+
+ALLOWED_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif",
+    "video/mp4",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/x-matroska",
+    "video/webm",
+}
+
+IMAGE_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif",
+}
+
+VIDEO_MIME_TYPES = {
+    "video/mp4",
+    "video/quicktime",
+    "video/x-msvideo",
+    "video/x-matroska",
+    "video/webm",
+}
+
+# ================= 파일 검증 유틸 함수 =================
+
+def make_safe_filename(original_filename: str) -> str:
+    ext = Path(original_filename).suffix.lower()
+    allowed_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif",
+                    ".mp4", ".mov", ".avi", ".mkv", ".webm"}
+    safe_ext = ext if ext in allowed_exts else ""
+    return f"{uuid.uuid4().hex}{safe_ext}"
+
+
+async def validate_and_read_file(file: UploadFile) -> tuple[bytes, str]:
+    content = await file.read(MAX_FILE_SIZE + 1)
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"[{file.filename}] 파일 크기가 {MAX_FILE_SIZE // (1024 * 1024)}MB를 초과합니다."
+        )
+    try:
+        real_mime = magic.from_buffer(content[:2048], mime=True)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail=f"[{file.filename}] 파일 형식을 판별할 수 없습니다."
+        )
+
+    if real_mime not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"[{file.filename}] 허용되지 않는 파일 형식입니다. (감지된 형식: {real_mime})"
+        )
+
+    if real_mime in IMAGE_MIME_TYPES:
+        try:
+            img = Image.open(io.BytesIO(content))
+            img.verify()
+            img = Image.open(io.BytesIO(content))
+            img.load()
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail=f"[{file.filename}] 유효하지 않거나 손상된 이미지 파일입니다."
+            )
+
+    return content, real_mime
 
 # ================= 2. 통합 탐지 스캐너 클래스 =================
 class IntegratedScanner:
@@ -89,7 +173,7 @@ class IntegratedScanner:
             load_args = {"torch_dtype": self.dtype, "use_safetensors": True}
             self.vaes['sd1.5'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd1.5"), **load_args).to(self.device).eval()
             self.vaes['sd2.1'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sd2.1"), **load_args).to(self.device).eval()
-            self.vaes['sdxl'] = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sdxl"), **load_args).to(self.device).eval()
+            self.vaes['sdxl']  = AutoencoderKL.from_pretrained(os.path.join(self.model_dir, "vae_sdxl"),  **load_args).to(self.device).eval()
 
             self.lpips_loss = lpips.LPIPS(net='vgg', pretrained=False).to(self.device).eval()
             self.lpips_loss.load_state_dict(torch.load(os.path.join(self.model_dir, "lpips_vgg.pth"), map_location=self.device))
@@ -135,7 +219,7 @@ class IntegratedScanner:
         return pil_img.crop((x, y, x + crop_size, y + crop_size))
 
     def get_fire_score(self, img_tensor, recon_tensor):
-        img_fft = torch.fft.fftshift(torch.fft.fftn(img_tensor.float(), dim=(-2, -1)))
+        img_fft   = torch.fft.fftshift(torch.fft.fftn(img_tensor.float(),   dim=(-2, -1)))
         recon_fft = torch.fft.fftshift(torch.fft.fftn(recon_tensor.float(), dim=(-2, -1)))
         b, c, h, w = img_tensor.shape
         y, x = torch.meshgrid(torch.arange(h), torch.arange(w), indexing='ij')
@@ -149,7 +233,7 @@ class IntegratedScanner:
         laplacian_var = cv2.Laplacian(cv_img, cv2.CV_64F).var()
         return float(np.clip(np.log1p(laplacian_var) / 7.0, 0, 1))
 
-    #메타데이터 분석 함수
+    # 메타데이터 분석 함수
     def analyze_metadata(self, img_path):
         results = {
             "is_ai_metadata": False,
@@ -206,7 +290,8 @@ class IntegratedScanner:
             image_crop.save(temp_orig_path)
             
             original_base64 = self.encode_image_to_base64(temp_orig_path)
-            heatmap_base64 = self.generate_heatmap(img_tensor, best_recon, adaptive_thr, f"{ts}_{filename}")
+            heatmap_base64  = self.generate_heatmap(img_tensor, best_recon, adaptive_thr, f"{ts}_{filename}")
+
             if metadata_res["is_ai_metadata"]:
                 verdict = f"가짜 ({metadata_res['source']})"
             elif fire_score < 35.0:
@@ -242,18 +327,26 @@ class IntegratedScanner:
             if len(ae_list) >= target_samples: break
         cap.release()
 
-        avg_ae = sum(ae_list)/len(ae_list)
-        avg_fire = sum(fire_list)/len(fire_list)
-        verdict = "가짜" if (avg_ae < sum(thr_list)/len(thr_list)) or (avg_fire < 42.0) else "진짜"
+        avg_ae   = sum(ae_list) / len(ae_list)
+        avg_fire = sum(fire_list) / len(fire_list)
+        verdict  = "가짜" if (avg_ae < sum(thr_list)/len(thr_list)) or (avg_fire < 42.0) else "진짜"
         return avg_ae, avg_fire, sum(comp_list)/len(comp_list), sum(thr_list)/len(thr_list), verdict, best_frame_data["orig"], best_frame_data["heat"]
+
 
 # ================= 3. FastAPI 서버 =================
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 scanner = IntegratedScanner(MODEL_DIR)
 
-#허용 경로 설정
-ALLOWED_PATHS = ["/", "/upload", "/report-fake-url", "/check-site", "/admin"]
+# 허용 경로 설정
+ALLOWED_PATHS = ["/", "/upload", "/report-fake-url", "/check-site", "/blacklist"]
+
 @app.middleware("http")
 async def whitelist_filter(request: Request, call_next):
     path = request.url.path
@@ -265,7 +358,7 @@ async def whitelist_filter(request: Request, call_next):
 async def read_index():
     with open("index.html", "r", encoding="utf-8") as f:
         return f.read()
-    
+
 # DB 초기화
 def init_db():
     conn = sqlite3.connect("fake_sites.db")
@@ -283,8 +376,8 @@ def init_db():
 init_db()
 
 # 관리자 대시보드 - DB에 등록된 사이트 목록 확인용
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard():
+@app.get("/blacklist", response_class=HTMLResponse)
+async def list_dashboard():
     conn = sqlite3.connect("fake_sites.db")
     cursor = conn.cursor()
     cursor.execute("SELECT url, detected_at, hit_count FROM fake_sites ORDER BY detected_at DESC")
@@ -293,7 +386,7 @@ async def admin_dashboard():
 
     html_content = f"""
     <html>
-        <head><title>Deepfake Detector Admin</title></head>
+        <head><title>Deepfake Detector Blacklist</title></head>
         <body style="font-family: sans-serif; padding: 20px;">
             <h2>🚫 탐지된 가짜 이미지 사이트 목록</h2>
             <table border="1" style="width:100%; border-collapse: collapse;">
@@ -306,7 +399,7 @@ async def admin_dashboard():
     </html>
     """
     return html_content
-    
+
 # 가짜 사이트 등록 API
 @app.post("/report-fake-url")
 async def report_fake_url(url: str = Form(...), user_token: str = Form("anonymous")):
@@ -325,13 +418,12 @@ async def report_fake_url(url: str = Form(...), user_token: str = Form("anonymou
             ''', (clean_url, now, now))
             conn.commit()
             return {"status": "success", "url": clean_url}
-        except Exception as e: 
+        except Exception as e:
             return {"status": "error", "message": str(e)}
-        finally: 
+        finally:
             conn.close()
     else:
         return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid URL format"})
-
 
 # 사이트 조회 API
 @app.get("/check-site")
@@ -342,88 +434,97 @@ async def check_site(url: str):
     result = cursor.fetchone()
     conn.close()
 
-    hit_count = result[0] if result else 0
+    hit_count    = result[0] if result else 0
     is_blacklisted = hit_count >= BLACKLIST_THRESHOLD
 
     return {"is_blacklisted": is_blacklisted, "hit_count": hit_count, "threshold": BLACKLIST_THRESHOLD}
 
+
 # 파일 업로드 API
 @app.post("/upload")
 async def detect_files(
-    files: List[UploadFile] = File(...), 
+    files: List[UploadFile] = File(...),
     expected_answer: str = Form("none")
 ):
+    if len(files) > MAX_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"한 번에 최대 {MAX_FILES}개까지만 업로드 가능합니다."
+        )
+
     results = []
     correct_count = 0
-    video_exts = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
 
     for file in files:
-        # 파일 저장
-        path = os.path.join(UPLOAD_DIR, file.filename)
-        with open(path, "wb") as buffer: 
-            shutil.copyfileobj(file.file, buffer)
-        
-        ext = os.path.splitext(file.filename)[1].lower()
-        
-        # 분석 실행
-        if ext in video_exts:
-            ae, fire, comp, thr, verdict, orig, heat = scanner.process_video(path)
-            method = "AEROBLADE+FIRE (Video)"
+        content, real_mime = await validate_and_read_file(file)
+        safe_name     = make_safe_filename(file.filename)
+        display_name  = file.filename
+        save_path     = os.path.join(UPLOAD_DIR, safe_name)
+
+        with open(save_path, "wb") as f:
+            f.write(content)
+
+        # ── 분석 실행 ────────────────────────────────────────────────
+        is_video = real_mime in VIDEO_MIME_TYPES
+
+        if is_video:
+            ae, fire, comp, thr, verdict, orig, heat = scanner.process_video(save_path)
+            method         = "AEROBLADE+FIRE (Video)"
             detected_model = "Ensemble"
         else:
-            ae, fire, comp, thr, model, orig, heat, verdict = scanner.get_score(path, file.filename)
-            method = f"AEROBLADE ({model})"
+            ae, fire, comp, thr, model, orig, heat, verdict = scanner.get_score(save_path, safe_name)
+            method         = f"AEROBLADE ({model})"
             detected_model = model
 
         # 정답 테스트 모드 계산
         is_correct = None
         if expected_answer in ["진짜", "가짜"]:
             is_correct = (verdict == expected_answer)
-            if is_correct: correct_count += 1
+            if is_correct:
+                correct_count += 1
 
-        # 결과 리스트에 모든 지표 추가 (HTML 출력 및 CSV 저장용)
         res_entry = {
-            "filename": file.filename,
-            "result": verdict,
-            "score": round(ae, 5),          # LPIPS Error (HTML 표시용)
-            "ae_score": round(ae, 5),       # CSV 상세 저장용
-            "fire_score": round(fire, 5),
-            "threshold": round(thr, 5),     # 적용된 임계값
-            "complexity": round(comp, 3),   # 시각적 복잡도
-            "method": method,
+            "filename":        display_name,   # 원본 파일명
+            "result":          verdict,
+            "score":           round(ae,   5),
+            "ae_score":        round(ae,   5),
+            "fire_score":      round(fire, 5),
+            "threshold":       round(thr,  5),
+            "complexity":      round(comp, 3),
+            "method":          method,
             "detected_source": detected_model,
-            "is_correct": is_correct,
-            "original_url": orig,
-            "heatmap_url": heat
+            "is_correct":      is_correct,
+            "original_url":    orig,
+            "heatmap_url":     heat,
         }
         results.append(res_entry)
 
-        print(f"[{file.filename}] 결과: {verdict} (AE: {ae:.5f}, FIRE: {fire:.2f}, Thr: {thr:.5f})")
+        print(f"[{display_name}] 결과: {verdict} (AE: {ae:.5f}, FIRE: {fire:.2f}, Thr: {thr:.5f})")
 
-        # CSV 로깅 로직
+        # CSV 로깅
         if results:
-            log_df = pd.DataFrame([{k: v for k, v in r.items() if 'url' not in k} for r in results])
+            log_df   = pd.DataFrame([{k: v for k, v in r.items() if 'url' not in k} for r in results])
             csv_path = "detection_history.csv"
             if not os.path.exists(csv_path):
                 log_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
             else:
                 log_df.to_csv(csv_path, index=False, mode='a', header=False, encoding='utf-8-sig')
 
-    # 요약 정보와 함께 반환
     accuracy = round((correct_count / len(files)) * 100, 2) if expected_answer != "none" else 0
     return {
         "summary": {
-            "total": len(files),
-            "correct": correct_count,
-            "accuracy": accuracy,
-            "tested_type": expected_answer
+            "total":       len(files),
+            "correct":     correct_count,
+            "accuracy":    accuracy,
+            "tested_type": expected_answer,
         },
-        "details": results
+        "details": results,
     }
+
 
 if __name__ == "__main__":
     uvicorn.run(
-        app, 
-        host=set_host, 
+        app,
+        host=set_host,
         port=set_port,
     )

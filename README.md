@@ -39,7 +39,7 @@ Google Chrome Browser
 Clone the repository and install dependencies:
 
 ```Bash
-pip install fastapi uvicorn torch torchvision pillow-heif diffusers lpips pandas opencv-python  python-multipart accelerate
+pip install fastapi uvicorn torch torchvision pillow-heif diffusers lpips pandas opencv-python  python-multipart accelerate python-magic-bin
 ```
 Place your pre-trained models in the local_models/ directory.
 
@@ -48,7 +48,7 @@ Run the server:
 ```bash
 python integrated_server.py
 ```
-The server will be accessible at http://localhost:8080 (or your configured domain).
+The server will be accessible at http://localhost:80 (or your configured domain).
 
 2. Extension Installation
 Open Chrome and navigate to chrome://extensions.
