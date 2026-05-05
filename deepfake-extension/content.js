@@ -244,9 +244,12 @@ function showOverlay(text, type, data = null) {
         const FIRE_THR = 42.0;
         const isFireFake = data.fire_score < FIRE_THR;
         const isAeFake   = data.score < data.threshold;
+        const metadataFake = data.detected_source && data.detected_source.startsWith("메타데이터 탐지");
         let displayVal, displayThr, maxVal, gaugeTitle;
 
-        if (isFireFake && !isAeFake) {
+        if (metadataFake) {
+            displayVal = data.score; displayThr = data.threshold; maxVal = 0.15; gaugeTitle = "메타데이터 탐지";
+        } else if (isFireFake && !isAeFake) {
             displayVal = data.fire_score; displayThr = FIRE_THR; maxVal = 80; gaugeTitle = "FIRE Score (주파수 분석)";
         } else {
             displayVal = data.score; displayThr = data.threshold; maxVal = 0.15; gaugeTitle = "AEROBLADE (재구성 오차)";

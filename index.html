@@ -267,7 +267,7 @@
             100% { opacity: 0.6; }
         }
 
-        /* 📱 모바일 환경 최적화 추가 (카드 여백 조절) */
+        /* 모바일 환경 최적화 추가 (카드 여백 조절) */
         @media (max-width: 768px) {
             .result-card {
                 padding: 20px; 
@@ -380,8 +380,15 @@
 
                 const isFireFake = data.fire_score < FIRE_THR;
                 const isAeFake = data.score < data.threshold;
+                const metadataFake = data.detected_source && data.detected_source.startsWith("메타데이터 탐지");
 
-                if (isFireFake && !isAeFake) {
+                if (metadataFake) {
+                    displayVal = data.score;
+                    displayThr = data.threshold;
+                    maxVal = 0.15;
+                    gaugeTitle = "메타데이터 탐지";
+                    unit = "";
+                } else if (isFireFake && !isAeFake) {
                     displayVal = data.fire_score;
                     displayThr = FIRE_THR;
                     maxVal = 80; 

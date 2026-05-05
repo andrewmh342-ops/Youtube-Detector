@@ -2,7 +2,9 @@ import os
 import io
 import math
 import uuid
+import json
 import magic
+import struct
 import torch
 import pandas as pd
 import numpy as np
@@ -10,6 +12,9 @@ from PIL import Image
 import cv2
 from diffusers import AutoencoderKL
 import lpips
+import piexif
+from imwatermark import WatermarkDecoder
+import c2pa
 from pillow_heif import register_heif_opener
 register_heif_opener()
 from fastapi.responses import HTMLResponse
@@ -187,7 +192,6 @@ class IntegratedScanner:
         except: return ""
 
     def generate_heatmap(self, original_tensor, recon_tensor, threshold, save_filename):
-        """재구성 오차를 기반으로 히트맵 생성"""
         diff = torch.abs(original_tensor - recon_tensor)
         diff_map = diff.mean(dim=1).squeeze().cpu().to(torch.float32).numpy()
 
@@ -233,33 +237,211 @@ class IntegratedScanner:
         laplacian_var = cv2.Laplacian(cv_img, cv2.CV_64F).var()
         return float(np.clip(np.log1p(laplacian_var) / 7.0, 0, 1))
 
-    # 메타데이터 분석 함수
-    def analyze_metadata(self, img_path):
-        results = {
-            "is_ai_metadata": False,
-            "source": "Unknown",
-            "details": ""
-        }
-        
+    # C2PA 서명 탐지
+    def _detect_c2pa(self, img_path: str) -> dict:
+        result = {"detected": False, "source": "", "details": ""}
+        if not isinstance(img_path, str):
+            return result
         try:
-            with Image.open(img_path) as img:
-                if "XML:com.adobe.xmp" in img.info:
-                    xmp_data = img.info["XML:com.adobe.xmp"]
-                    if "dalle" in xmp_data.lower() or "openai" in xmp_data.lower():
-                        results.update({"is_ai_metadata": True, "source": "DALL-E 3 (OpenAI)", "details": "C2PA/XMP 데이터 감지"})
-                iptc = img.info.get("iptc")
-                if iptc:
-                    if b"google" in str(iptc).lower() or b"imagen" in str(iptc).lower():
-                        results.update({"is_ai_metadata": True, "source": "Gemini (Google)", "details": "IPTC 디지털 소스 정보 확인"})
-                if img.format == "PNG":
-                    for key, value in img.info.items():
-                        if any(word in str(value).lower() for word in ["flux", "grok", "xai"]):
-                            results.update({"is_ai_metadata": True, "source": "Grok (xAI)", "details": f"PNG Info 내 {key} 태그 감지"})
+            mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                        ".png": "image/png", ".webp": "image/webp"}
+            ext = os.path.splitext(img_path)[1].lower()
+            mime = mime_map.get(ext)
+            if not mime:
+                return result
+
+            reader = c2pa.Reader(mime, open(img_path, "rb"))
+            manifest_json = reader.json()
+            manifest = json.loads(manifest_json)
+
+            active_label = manifest.get("active_manifest", "")
+            manifests = manifest.get("manifests", {})
+            if not active_label or active_label not in manifests:
+                return result
+
+            active = manifests[active_label]
+            assertions = active.get("assertions", [])
+
+            for assertion in assertions:
+                label = assertion.get("label", "").lower()
+                data  = assertion.get("data", {})
+
+                if "generative" in label or "ai.generated" in label:
+                    entries = data if isinstance(data, list) else [data]
+                    for entry in entries:
+                        gen_tool = str(entry.get("alg", "") + entry.get("name", "")).lower()
+                        source = self._map_c2pa_source(gen_tool, active)
+                        result.update({"detected": True, "source": source,
+                                       "details": f"C2PA AI 생성 서명 확인 (assertion: {label})"})
+                        return result
+
+                if "digitalsource" in label or "digital_source" in label:
+                    src_type = str(data.get("digitalSourceType", "")).lower()
+                    if "trainedAlgorithmicMedia" in src_type or "compositeWithTrainedAlgorithmicMedia" in src_type:
+                        source = self._map_c2pa_source("", active)
+                        result.update({"detected": True, "source": source,
+                                       "details": f"C2PA digitalSourceType: {src_type}"})
+                        return result
+
+            claim_generator = active.get("claim_generator", "").lower()
+            if any(kw in claim_generator for kw in ["openai", "adobe", "google", "midjourney", "stability"]):
+                source = self._map_c2pa_source(claim_generator, active)
+                result.update({"detected": True, "source": source,
+                               "details": f"C2PA claim_generator: {claim_generator}"})
+
+        except Exception as e:
+            pass
+        return result
+
+    def _map_c2pa_source(self, gen_tool: str, manifest_data: dict) -> str:
+        claim = (manifest_data.get("claim_generator", "") + gen_tool).lower()
+        if "openai" in claim or "dalle" in claim:   return "DALL-E (OpenAI)"
+        if "google" in claim or "imagen" in claim:  return "Imagen (Google)"
+        if "adobe" in claim or "firefly" in claim:  return "Firefly (Adobe)"
+        if "midjourney" in claim:                   return "Midjourney"
+        if "stability" in claim or "stable" in claim: return "Stable Diffusion"
+        return "AI 생성 (C2PA 서명 확인됨)"
+
+    # 주파수 도메인 불가시 워터마크 탐지
+    def _detect_invisible_watermark(self, img_path_or_pil) -> dict:
+        result = {"detected": False, "source": "", "details": ""}
+        try:
+            if isinstance(img_path_or_pil, str):
+                pil_img = Image.open(img_path_or_pil).convert("RGB")
+            else:
+                pil_img = img_path_or_pil.convert("RGB")
+
+            if pil_img.width < 256 or pil_img.height < 256:
+                return result
+
+            cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+            decoder_48 = WatermarkDecoder("bits", 48)
+            bits_48 = decoder_48.decode(cv_img, "dwtDct")
+            score_48 = self._watermark_bit_score(bits_48)
+
+            decoder_32 = WatermarkDecoder("bits", 32)
+            bits_32 = decoder_32.decode(cv_img, "dwtDctSvd")
+            score_32 = self._watermark_bit_score(bits_32)
+
+            # 비트 편향이 0.72 이상이면 워터마크 패턴으로 판정
+            BIAS_THRESHOLD = 0.72
+            if score_48 >= BIAS_THRESHOLD:
+                result.update({"detected": True, "source": "Stable Diffusion / HuggingFace",
+                               "details": f"dwtDct 48bit 워터마크 패턴 감지 (bias={score_48:.3f})"})
+            elif score_32 >= BIAS_THRESHOLD:
+                result.update({"detected": True, "source": "Stable Diffusion / HuggingFace",
+                               "details": f"dwtDctSvd 32bit 워터마크 패턴 감지 (bias={score_32:.3f})"})
+
+        except Exception as e:
+            pass
+        return result
+
+    def _watermark_bit_score(self, bits) -> float:
+        """
+        비트열의 편향도(bias)를 측정합니다.
+        순수 노이즈라면 ~0.5, 워터마크가 있으면 0.7 이상의 편향이 나타납니다.
+        """
+        if bits is None or len(bits) == 0:
+            return 0.5
+        arr = np.array(bits, dtype=float)
+        ones_ratio  = arr.mean()
+        zeros_ratio = 1.0 - ones_ratio
+        return float(max(ones_ratio, zeros_ratio))
+
+    # 메타데이터 심층 분석
+    def _detect_metadata(self, img_path_or_pil) -> dict:
+        """EXIF, PNG tEXt 청크, XMP 전체를 파싱해 AI 생성 신호를 찾습니다."""
+        result = {"detected": False, "source": "", "details": ""}
+
+        AI_KEYWORDS = {
+            "openai": "DALL-E (OpenAI)", "dall-e": "DALL-E (OpenAI)", "dalle": "DALL-E (OpenAI)",
+            "google": "Imagen (Google)", "imagen": "Imagen (Google)", "gemini": "Gemini (Google)",
+            "midjourney": "Midjourney", "niji": "Midjourney (Niji)",
+            "stable diffusion": "Stable Diffusion", "stability ai": "Stable Diffusion",
+            "flux": "FLUX (Black Forest Labs)",
+            "grok": "Grok (xAI)", "aurora": "Grok Aurora (xAI)",
+            "firefly": "Firefly (Adobe)", "adobe": "Firefly (Adobe)",
+            "ideogram": "Ideogram", "leonardo": "Leonardo.Ai",
+            "runway": "RunwayML", "pika": "Pika Labs",
+            "kling": "Kling (Kuaishou)", "hailuo": "Hailuo (MiniMax)",
+        }
+
+        try:
+            if isinstance(img_path_or_pil, str):
+                pil_img = Image.open(img_path_or_pil)
+                img_path = img_path_or_pil
+            else:
+                pil_img = img_path_or_pil
+                img_path = None
+
+            info = pil_img.info or {}
+
+            # PNG tEXt, iTXt 청크 전수 검사
+            all_text = " ".join(str(v) for v in info.values()).lower()
+            for kw, source in AI_KEYWORDS.items():
+                if kw in all_text:
+                    result.update({"detected": True, "source": source,
+                                   "details": f"PNG 메타데이터 내 '{kw}' 감지"})
+                    return result
+
+            # XMP 블록 검사
+            xmp_data = info.get("XML:com.adobe.xmp", "")
+            if xmp_data:
+                xmp_lower = xmp_data.lower()
+                # xmp:CreatorTool, Iptc4xmpExt:DigitalSourceType 등 파싱
+                for kw, source in AI_KEYWORDS.items():
+                    if kw in xmp_lower:
+                        result.update({"detected": True, "source": source,
+                                       "details": f"XMP 블록 내 '{kw}' 감지"})
+                        return result
+                # IPTC4XMP DigitalSourceType AI 생성 코드
+                if "trainedAlgorithmicMedia" in xmp_data or "compositeWithTrainedAlgorithmicMedia" in xmp_data:
+                    result.update({"detected": True, "source": "AI 생성 (XMP IPTC4XMP)",
+                                   "details": "XMP DigitalSourceType=trainedAlgorithmicMedia 확인"})
+                    return result
+
+            # JPEG EXIF 검사 (piexif)
+            if img_path and pil_img.format == "JPEG":
+                try:
+                    exif_dict = piexif.load(img_path)
+                    for ifd in exif_dict.values():
+                        if not isinstance(ifd, dict):
+                            continue
+                        for tag_val in ifd.values():
+                            tag_str = tag_val.decode("utf-8", errors="ignore").lower() \
+                                if isinstance(tag_val, bytes) else str(tag_val).lower()
+                            for kw, source in AI_KEYWORDS.items():
+                                if kw in tag_str:
+                                    result.update({"detected": True, "source": source,
+                                                   "details": f"EXIF 태그 내 '{kw}' 감지"})
+                                    return result
+                except Exception:
+                    pass
 
         except Exception as e:
             print(f"메타데이터 분석 오류: {e}")
-        
-        return results
+
+        return result
+
+    # 메타데이터 탐지 로직
+    def analyze_metadata(self, img_path) -> dict:
+        # C2PA 디지털 서명 탐지
+        r = self._detect_c2pa(img_path)
+        if r["detected"]:
+            return {"is_ai_metadata": True, "source": r["source"], "details": r["details"]}
+
+        # invisible watermark
+        r = self._detect_invisible_watermark(img_path)
+        if r["detected"]:
+            return {"is_ai_metadata": True, "source": r["source"], "details": r["details"]}
+
+        # 메타데이터 심층 분석
+        r = self._detect_metadata(img_path)
+        if r["detected"]:
+            return {"is_ai_metadata": True, "source": r["source"], "details": r["details"]}
+
+        return {"is_ai_metadata": False, "source": "Unknown", "details": ""}
 
     def get_score(self, img_path_or_pil, filename="temp"):
         try:
@@ -294,6 +476,7 @@ class IntegratedScanner:
 
             if metadata_res["is_ai_metadata"]:
                 verdict = f"가짜 ({metadata_res['source']})"
+                detected_model = f"메타데이터 탐지 ({metadata_res['source']})"
             elif fire_score < 35.0:
                 verdict = "가짜"
             else:
