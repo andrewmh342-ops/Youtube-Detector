@@ -39,7 +39,7 @@ Google Chrome Browser
 Clone the repository and install dependencies:
 
 ```Bash
-pip install fastapi uvicorn torch torchvision pillow-heif diffusers lpips pandas opencv-python  python-multipart accelerate python-magic-bin c2pa-python invisible-watermark piexif
+pip install fastapi uvicorn torch torchvision pillow-heif diffusers lpips pandas opencv-python  python-multipart accelerate python-magic-bin c2pa-python piexif
 ```
 Place your pre-trained models in the local_models/ directory.
 
