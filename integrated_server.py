@@ -191,7 +191,7 @@ class IntegratedScanner:
         diff = torch.abs(original_tensor - recon_tensor)
         diff_map = diff.mean(dim=1).squeeze().cpu().to(torch.float32).numpy()
 
-        # 오차가 적을수록(AI 재구성이 잘 될수록) 더 붉게 표시
+        # 오차가 적을수록 더 붉게 표시
         fake_intensity = np.clip((threshold - diff_map) / (threshold + 1e-8), 0, 1)
         fake_intensity = np.power(fake_intensity, 2.5) 
         fake_intensity = (fake_intensity * 255).astype(np.uint8)
@@ -273,11 +273,35 @@ class IntegratedScanner:
 
                 if "digitalsource" in label or "digital_source" in label:
                     src_type = str(data.get("digitalSourceType", "")).lower()
-                    if "trainedAlgorithmicMedia" in src_type or "compositeWithTrainedAlgorithmicMedia" in src_type:
+                    if "trainedalgorithmicmedia" in src_type or "compositewithtrainedalgorithmicmedia" in src_type:
                         source = self._map_c2pa_source("", active)
                         result.update({"detected": True, "source": source,
                                        "details": f"C2PA digitalSourceType: {src_type}"})
                         return result
+
+                if "actions" in label:
+                    for action in data.get("actions", []):
+                        src_type = str(action.get("digitalSourceType", "")).lower()
+                        if "trainedalgorithmicmedia" in src_type or "compositewithtrainedalgorithmicmedia" in src_type:
+                            agent = action.get("softwareAgent", {})
+                            agent_name = agent.get("name", "") if isinstance(agent, dict) else str(agent)
+                            source = self._map_c2pa_source(agent_name.lower(), active)
+                            result.update({"detected": True, "source": source,
+                                           "details": f"C2PA actions.digitalSourceType: trainedAlgorithmicMedia (agent: {agent_name})"})
+                            return result
+
+                    C2PA_VENDOR_KEYWORDS = {
+                        "google": "Imagen (Google)", "gemini": "Gemini (Google)",
+                        "openai": "DALL-E (OpenAI)", "chatgpt": "DALL-E (OpenAI)",
+                        "midjourney": "Midjourney", "stability": "Stable Diffusion",
+                        "adobe": "Firefly (Adobe)", "firefly": "Firefly (Adobe)",
+                    }
+                    actions_text = str(data).lower()
+                    for kw, source in C2PA_VENDOR_KEYWORDS.items():
+                        if kw in actions_text:
+                            result.update({"detected": True, "source": source,
+                                           "details": f"C2PA actions 내 '{kw}' 감지"})
+                            return result
 
             claim_generator = active.get("claim_generator", "").lower()
             if any(kw in claim_generator for kw in ["openai", "adobe", "google", "midjourney", "stability"]):
@@ -291,7 +315,7 @@ class IntegratedScanner:
 
     def _map_c2pa_source(self, gen_tool: str, manifest_data: dict) -> str:
         claim = (manifest_data.get("claim_generator", "") + gen_tool).lower()
-        if "openai" in claim or "dalle" in claim:   return "DALL-E (OpenAI)"
+        if "openai" in claim or "dalle" in claim or "chatgpt" in claim: return "DALL-E (OpenAI)"
         if "google" in claim or "imagen" in claim:  return "Imagen (Google)"
         if "adobe" in claim or "firefly" in claim:  return "Firefly (Adobe)"
         if "midjourney" in claim:                   return "Midjourney"
@@ -304,14 +328,17 @@ class IntegratedScanner:
 
         AI_KEYWORDS = {
             "openai": "DALL-E (OpenAI)", "dall-e": "DALL-E (OpenAI)", "dalle": "DALL-E (OpenAI)",
-            "google": "Imagen (Google)", "imagen": "Imagen (Google)", "gemini": "Gemini (Google)",
-            "midjourney": "Midjourney", "niji": "Midjourney (Niji)",
+            "imagen": "Imagen (Google)", "google imagen": "Imagen (Google)",
+            "gemini": "Gemini (Google)",
+            "midjourney": "Midjourney",
+            "niji journey": "Midjourney (Niji)",
             "stable diffusion": "Stable Diffusion", "stability ai": "Stable Diffusion",
-            "flux": "FLUX (Black Forest Labs)",
-            "grok": "Grok (xAI)", "aurora": "Grok Aurora (xAI)",
-            "firefly": "Firefly (Adobe)", "adobe": "Firefly (Adobe)",
-            "ideogram": "Ideogram", "leonardo": "Leonardo.Ai",
-            "runway": "RunwayML", "pika": "Pika Labs",
+            "black forest labs": "FLUX (Black Forest Labs)",
+            "grok": "Grok (xAI)",
+            "adobe firefly": "Firefly (Adobe)", "firefly": "Firefly (Adobe)",
+            "ideogram": "Ideogram", "leonardo.ai": "Leonardo.Ai",
+            "runwayml": "RunwayML", "runway ml": "RunwayML",
+            "pika labs": "Pika Labs",
             "kling": "Kling (Kuaishou)", "hailuo": "Hailuo (MiniMax)",
         }
 
@@ -325,7 +352,6 @@ class IntegratedScanner:
 
             info = pil_img.info or {}
 
-            # PNG tEXt, iTXt 청크 전수 검사
             all_text = " ".join(str(v) for v in info.values()).lower()
             for kw, source in AI_KEYWORDS.items():
                 if kw in all_text:
@@ -333,28 +359,24 @@ class IntegratedScanner:
                                    "details": f"PNG 메타데이터 내 '{kw}' 감지"})
                     return result
 
-            # XMP 블록 검사
             xmp_data = info.get("XML:com.adobe.xmp", "")
             if xmp_data:
                 xmp_lower = xmp_data.lower()
-                # xmp:CreatorTool, Iptc4xmpExt:DigitalSourceType 등 파싱
                 for kw, source in AI_KEYWORDS.items():
                     if kw in xmp_lower:
                         result.update({"detected": True, "source": source,
                                        "details": f"XMP 블록 내 '{kw}' 감지"})
                         return result
-                # IPTC4XMP DigitalSourceType AI 생성 코드
                 if "trainedAlgorithmicMedia" in xmp_data or "compositeWithTrainedAlgorithmicMedia" in xmp_data:
                     result.update({"detected": True, "source": "AI 생성 (XMP IPTC4XMP)",
                                    "details": "XMP DigitalSourceType=trainedAlgorithmicMedia 확인"})
                     return result
 
-            # JPEG EXIF 검사 (piexif)
             if img_path and pil_img.format == "JPEG":
                 try:
                     exif_dict = piexif.load(img_path)
-                    for ifd in exif_dict.values():
-                        if not isinstance(ifd, dict):
+                    for ifd_name, ifd in exif_dict.items():
+                        if ifd_name == "GPS" or not isinstance(ifd, dict):
                             continue
                         for tag_val in ifd.values():
                             tag_str = tag_val.decode("utf-8", errors="ignore").lower() \
@@ -428,12 +450,12 @@ class IntegratedScanner:
             return min_ae, fire_score, complexity, adaptive_thr, detected_model, original_base64, heatmap_base64, verdict
         except Exception as e:
             print(f"오류: {e}")
-            return 999.0, 0.0, 0.5, 0.05, "Error", "", ""
+            return 999.0, 0.0, 0.5, 0.05, "Error", "", "", "진짜"
 
     def process_video(self, video_path, target_samples=15):
         cap = cv2.VideoCapture(video_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if not cap.isOpened(): return 999.0, 0.0, 0.5, 0.05, "Error", "", ""
+        if not cap.isOpened(): return 999.0, 0.0, 0.5, 0.05, "Error", "", "", "진짜"
 
         ae_list, fire_list, comp_list, thr_list = [], [], [], []
         best_frame_data = {"score": float('inf'), "orig": "", "heat": ""}
