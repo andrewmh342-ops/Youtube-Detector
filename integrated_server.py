@@ -13,7 +13,6 @@ import cv2
 from diffusers import AutoencoderKL
 import lpips
 import piexif
-from imwatermark import WatermarkDecoder
 import c2pa
 from pillow_heif import register_heif_opener
 register_heif_opener()
@@ -302,56 +301,8 @@ class IntegratedScanner:
         if "stability" in claim or "stable" in claim: return "Stable Diffusion"
         return "AI 생성 (C2PA 서명 확인됨)"
 
-    # 주파수 도메인 불가시 워터마크 탐지
-    def _detect_invisible_watermark(self, img_path_or_pil) -> dict:
-        result = {"detected": False, "source": "", "details": ""}
-        try:
-            if isinstance(img_path_or_pil, str):
-                pil_img = Image.open(img_path_or_pil).convert("RGB")
-            else:
-                pil_img = img_path_or_pil.convert("RGB")
-
-            if pil_img.width < 256 or pil_img.height < 256:
-                return result
-
-            cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-            decoder_48 = WatermarkDecoder("bits", 48)
-            bits_48 = decoder_48.decode(cv_img, "dwtDct")
-            score_48 = self._watermark_bit_score(bits_48)
-
-            decoder_32 = WatermarkDecoder("bits", 32)
-            bits_32 = decoder_32.decode(cv_img, "dwtDctSvd")
-            score_32 = self._watermark_bit_score(bits_32)
-
-            # 비트 편향이 0.72 이상이면 워터마크 패턴으로 판정
-            BIAS_THRESHOLD = 0.72
-            if score_48 >= BIAS_THRESHOLD:
-                result.update({"detected": True, "source": "Stable Diffusion / HuggingFace",
-                               "details": f"dwtDct 48bit 워터마크 패턴 감지 (bias={score_48:.3f})"})
-            elif score_32 >= BIAS_THRESHOLD:
-                result.update({"detected": True, "source": "Stable Diffusion / HuggingFace",
-                               "details": f"dwtDctSvd 32bit 워터마크 패턴 감지 (bias={score_32:.3f})"})
-
-        except Exception as e:
-            pass
-        return result
-
-    def _watermark_bit_score(self, bits) -> float:
-        """
-        비트열의 편향도(bias)를 측정합니다.
-        순수 노이즈라면 ~0.5, 워터마크가 있으면 0.7 이상의 편향이 나타납니다.
-        """
-        if bits is None or len(bits) == 0:
-            return 0.5
-        arr = np.array(bits, dtype=float)
-        ones_ratio  = arr.mean()
-        zeros_ratio = 1.0 - ones_ratio
-        return float(max(ones_ratio, zeros_ratio))
-
     # 메타데이터 심층 분석
     def _detect_metadata(self, img_path_or_pil) -> dict:
-        """EXIF, PNG tEXt 청크, XMP 전체를 파싱해 AI 생성 신호를 찾습니다."""
         result = {"detected": False, "source": "", "details": ""}
 
         AI_KEYWORDS = {
@@ -428,11 +379,6 @@ class IntegratedScanner:
     def analyze_metadata(self, img_path) -> dict:
         # C2PA 디지털 서명 탐지
         r = self._detect_c2pa(img_path)
-        if r["detected"]:
-            return {"is_ai_metadata": True, "source": r["source"], "details": r["details"]}
-
-        # invisible watermark
-        r = self._detect_invisible_watermark(img_path)
         if r["detected"]:
             return {"is_ai_metadata": True, "source": r["source"], "details": r["details"]}
 
@@ -647,7 +593,6 @@ async def detect_files(
         with open(save_path, "wb") as f:
             f.write(content)
 
-        # ── 분석 실행 ────────────────────────────────────────────────
         is_video = real_mime in VIDEO_MIME_TYPES
 
         if is_video:
