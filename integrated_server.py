@@ -1,10 +1,8 @@
 import os
 import io
-import math
 import uuid
 import json
 import magic
-import struct
 import torch
 import pandas as pd
 import numpy as np
@@ -18,13 +16,12 @@ from pillow_heif import register_heif_opener
 register_heif_opener()
 from fastapi.responses import HTMLResponse
 from torchvision import transforms
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 from datetime import datetime
 import uvicorn
-import shutil
 import base64
 import time
 from pathlib import Path
