@@ -78,10 +78,18 @@ VIDEO_MIME_TYPES = {
 
 # ================= 파일 검증 유틸 함수 =================
 
-def make_safe_filename(original_filename: str) -> str:
+MIME_TO_EXT = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+    "image/gif": ".gif", "image/heic": ".heic", "image/heif": ".heif",
+    "video/mp4": ".mp4", "video/quicktime": ".mov", "video/x-msvideo": ".avi",
+    "video/x-matroska": ".mkv", "video/webm": ".webm",
+}
+
+def make_safe_filename(original_filename: str, real_mime: str = None) -> str:
+    if real_mime and real_mime in MIME_TO_EXT:
+        return f"{uuid.uuid4().hex}{MIME_TO_EXT[real_mime]}"
     ext = Path(original_filename).suffix.lower()
-    allowed_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif",
-                    ".mp4", ".mov", ".avi", ".mkv", ".webm"}
+    allowed_exts = set(MIME_TO_EXT.values()) | {".jpeg"}
     safe_ext = ext if ext in allowed_exts else ""
     return f"{uuid.uuid4().hex}{safe_ext}"
 
@@ -243,7 +251,9 @@ class IntegratedScanner:
                         ".png": "image/png", ".webp": "image/webp"}
             ext = os.path.splitext(img_path)[1].lower()
             mime = mime_map.get(ext)
+            print(f"[C2PA DEBUG] file={img_path}, ext={ext}, mime={mime}")
             if not mime:
+                print(f"[C2PA DEBUG] mime 판별 불가 — 건너뜀")
                 return result
 
             reader = c2pa.Reader(mime, open(img_path, "rb"))
@@ -253,10 +263,17 @@ class IntegratedScanner:
             active_label = manifest.get("active_manifest", "")
             manifests = manifest.get("manifests", {})
             if not active_label or active_label not in manifests:
+                print(f"[C2PA DEBUG] active manifest 없음")
                 return result
 
             active = manifests[active_label]
             assertions = active.get("assertions", [])
+            print(f"[C2PA DEBUG] active keys: {list(active.keys())}")
+            print(f"[C2PA DEBUG] assertion labels: {[a.get('label','') for a in assertions]}")
+            for a in assertions:
+                if "actions" in a.get("label", "").lower():
+                    print(f"[C2PA DEBUG] actions data: {str(a.get('data'))[:600]}")
+            print(f"[C2PA DEBUG] full manifest json: {manifest_json[:3000]}")
 
             for assertion in assertions:
                 label = assertion.get("label", "").lower()
@@ -308,6 +325,24 @@ class IntegratedScanner:
                 source = self._map_c2pa_source(claim_generator, active)
                 result.update({"detected": True, "source": source,
                                "details": f"C2PA claim_generator: {claim_generator}"})
+                return result
+
+            C2PA_CG_TOOLS = {
+                "google c2pa": "Imagen (Google)",
+                "openai": "DALL-E (OpenAI)", "chatgpt": "DALL-E (OpenAI)",
+                "midjourney": "Midjourney",
+                "stability": "Stable Diffusion",
+                "adobe": "Firefly (Adobe)", "firefly": "Firefly (Adobe)",
+            }
+            for mdata in manifests.values():
+                cg_names = " ".join(
+                    cgi.get("name", "") for cgi in mdata.get("claim_generator_info", [])
+                ).lower()
+                for kw, source in C2PA_CG_TOOLS.items():
+                    if kw in cg_names:
+                        result.update({"detected": True, "source": source,
+                                       "details": f"C2PA claim_generator_info: {cg_names[:80]}"})
+                        return result
 
         except Exception as e:
             pass
@@ -316,7 +351,8 @@ class IntegratedScanner:
     def _map_c2pa_source(self, gen_tool: str, manifest_data: dict) -> str:
         claim = (manifest_data.get("claim_generator", "") + gen_tool).lower()
         if "openai" in claim or "dalle" in claim or "chatgpt" in claim: return "DALL-E (OpenAI)"
-        if "google" in claim or "imagen" in claim:  return "Imagen (Google)"
+        if "google c2pa" in claim or "imagen" in claim: return "Imagen (Google)"
+        if "google" in claim: return "Imagen (Google)"
         if "adobe" in claim or "firefly" in claim:  return "Firefly (Adobe)"
         if "midjourney" in claim:                   return "Midjourney"
         if "stability" in claim or "stable" in claim: return "Stable Diffusion"
@@ -351,8 +387,10 @@ class IntegratedScanner:
                 img_path = None
 
             info = pil_img.info or {}
+            print(f"[META DEBUG] format={pil_img.format}, info_keys={list(info.keys())}")
 
             all_text = " ".join(str(v) for v in info.values()).lower()
+            print(f"[META DEBUG] all_text preview: {all_text[:200]}")
             for kw, source in AI_KEYWORDS.items():
                 if kw in all_text:
                     result.update({"detected": True, "source": source,
@@ -605,7 +643,7 @@ async def detect_files(
 
     for file in files:
         content, real_mime = await validate_and_read_file(file)
-        safe_name     = make_safe_filename(file.filename)
+        safe_name     = make_safe_filename(file.filename, real_mime)
         display_name  = file.filename
         save_path     = os.path.join(UPLOAD_DIR, safe_name)
 

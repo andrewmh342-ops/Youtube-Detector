@@ -205,7 +205,9 @@ async function analyzeImageUrl(url) {
         const response = await fetch(url, { mode: 'cors' }).catch(() => null);
         if (!response || !response.ok) throw new Error("보안 정책(CORS)으로 이미지를 가져올 수 없습니다.");
         const blob = await response.blob();
-        await sendToServer(blob, 'web_image.jpg');
+        const mimeToExt = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif'};
+        const ext = mimeToExt[blob.type] || '.jpg';
+        await sendToServer(blob, `web_image${ext}`);
     } catch (e) {
         showOverlay("❌ 실패: " + e.message, "fake");
         setTimeout(hideOverlay, 3000);
