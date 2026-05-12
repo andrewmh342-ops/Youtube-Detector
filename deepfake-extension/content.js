@@ -16,7 +16,7 @@ const CUSTOM_AI_KEYWORDS = [
 ];
 
 function getNormalizedSiteUrl() {
-    return window.location.origin.replace(/\/$/, "");
+    return window.location.href.replace(/\/$/, "");
 }
 
 
