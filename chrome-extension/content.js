@@ -4,8 +4,6 @@
  */
 
 // [설정 영역]
-const SERVER_URL = "http://deeptector.kro.kr";
-const BASE_URL = `${SERVER_URL}/upload`;
 let floatingBtn = null;
 let currentTargetImg = null;
 
